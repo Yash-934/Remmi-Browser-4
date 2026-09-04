@@ -708,6 +708,12 @@ class ContentProcessRecoveryTests {
     assertTrue("Logs must suppress recovery loop (max_attempts_exceeded)", logs.contains("reason=max_attempts_exceeded"))
     assertFalse("Logs must NOT claim NAV_SUCCESS", logs.contains("[CONTENT_RECOVERY_NAV_SUCCESS]"))
     assertFalse("Active recovery must be cleared after crash in-flight", manager.hasActiveRecovery(tabId))
+
+    // Third kill in same generation -> still suppressed by loop protection
+    DebugLogManager.clear()
+    session.contentDelegate?.onKill(session)
+    val logs3 = DebugLogManager.getCurrentSessionEvents().joinToString("\n")
+    assertTrue("Third kill must be suppressed with reason=max_attempts_exceeded", logs3.contains("reason=max_attempts_exceeded"))
   }
 
   @Test
@@ -735,6 +741,12 @@ class ContentProcessRecoveryTests {
     val logs = DebugLogManager.getCurrentSessionEvents().joinToString("\n")
     assertTrue("Logs must contain CONTENT_RECOVERY_TIMEOUT", logs.contains("[CONTENT_RECOVERY_TIMEOUT]"))
     assertFalse("Logs must NOT contain CONTENT_RECOVERY_NAV_SUCCESS", logs.contains("[CONTENT_RECOVERY_NAV_SUCCESS]"))
+
+    // Subsequent kill in same generation after timeout -> still suppressed by loop protection
+    DebugLogManager.clear()
+    session.contentDelegate?.onKill(session)
+    val logsAfterTimeout = DebugLogManager.getCurrentSessionEvents().joinToString("\n")
+    assertTrue("Kill after timeout must be suppressed with reason=max_attempts_exceeded", logsAfterTimeout.contains("reason=max_attempts_exceeded"))
   }
 
   @Test
@@ -851,5 +863,236 @@ class ContentProcessRecoveryTests {
     }
     val logsAfter = DebugLogManager.getCurrentSessionEvents().joinToString("\n")
     assertTrue("Logs must contain BUILD_VERIFY marker", logsAfter.contains("[BUILD_VERIFY] version=1.0.1-recovery-v2 stateMachine=ACTIVE"))
+  }
+
+  /**
+   * STEP 13: Fix recovery loop suppression after success.
+   * Recovery succeeds -> closed. Later independent content kill in same generation is allowed to recover.
+   */
+  @Test
+  fun testRecoverySucceeds_thenLaterContentKillInSameGeneration_allowsNewRecovery() = runBlocking {
+    val tab = tabManager.createTab("about:blank")
+    val tabId = tab.id
+    val settings = GeckoSessionSettings.Builder().usePrivateMode(true).build()
+    val session = GeckoSession(settings)
+    manager.setSessionForTesting(tabId, session)
+
+    val loadedUrls = mutableListOf<String>()
+    manager.uriLoaderForTest = { _, _, url -> loadedUrls.add(url) }
+
+    val geckoView = GeckoView(context).apply { tag = tabId }
+    manager.attachView(
+      tabId = tabId,
+      geckoView = geckoView,
+      profile = PrivacyProfile.SHIELD,
+      isDesktopMode = false,
+      callbacks = dummyCallbacks,
+    )
+
+    val testUrl = "https://example.com/multi-recovery"
+    manager.loadUrl(tabId, testUrl)
+    loadedUrls.clear()
+
+    // 1st kill -> triggers 1st recovery
+    session.contentDelegate?.onKill(session)
+    assertEquals("First kill should trigger recovery reload", 1, loadedUrls.size)
+    assertEquals(testUrl, loadedUrls[0])
+    assertTrue("First recovery is active", manager.hasActiveRecovery(tabId))
+
+    // First recovery progresses to completion
+    session.navigationDelegate?.onLocationChange(session, testUrl, mutableListOf(), false)
+    session.progressDelegate?.onPageStop(session, true)
+
+    assertFalse("First recovery should be closed after success", manager.hasActiveRecovery(tabId))
+    val logs1 = DebugLogManager.getCurrentSessionEvents().joinToString("\n")
+    assertTrue("Logs must contain CONTENT_RECOVERY_NAV_SUCCESS", logs1.contains("[CONTENT_RECOVERY_NAV_SUCCESS]"))
+
+    // Later independent 2nd kill occurs on the SAME tab and SAME generation (no user navigation)
+    loadedUrls.clear()
+    DebugLogManager.clear()
+    session.contentDelegate?.onKill(session)
+
+    assertEquals("Second kill in same generation after successful recovery MUST trigger new recovery", 1, loadedUrls.size)
+    assertEquals(testUrl, loadedUrls[0])
+    assertTrue("Second recovery is now active", manager.hasActiveRecovery(tabId))
+
+    val logs2 = DebugLogManager.getCurrentSessionEvents().joinToString("\n")
+    assertTrue("Logs must contain CONTENT_RECOVERY_START for second recovery", logs2.contains("[CONTENT_RECOVERY_START]"))
+    assertTrue("Logs must contain CONTENT_RECOVERY_LOAD for second recovery", logs2.contains("[CONTENT_RECOVERY_LOAD]"))
+    assertTrue("Logs must contain CONTENT_RECOVERY_DISPATCHED for second recovery", logs2.contains("[CONTENT_RECOVERY_DISPATCHED]"))
+    assertFalse("Second recovery must NOT be suppressed", logs2.contains("[CONTENT_RECOVERY_SUPPRESSED]"))
+
+    // Complete the second recovery as well
+    session.navigationDelegate?.onLocationChange(session, testUrl, mutableListOf(), false)
+    session.progressDelegate?.onPageStop(session, true)
+
+    assertFalse("Second recovery closed after success", manager.hasActiveRecovery(tabId))
+    val logs3 = DebugLogManager.getCurrentSessionEvents().joinToString("\n")
+    assertTrue("Logs must contain CONTENT_RECOVERY_NAV_SUCCESS for second recovery", logs3.contains("[CONTENT_RECOVERY_NAV_SUCCESS]"))
+  }
+
+  /**
+   * STEP 14 Test: Docshell reset to about:blank during recovery dispatch must NOT complete recovery or clear active recovery.
+   * Recovery must wait until the actual target URL completes loading.
+   */
+  @Test
+  fun testRecoveryIgnoresDocshellAboutBlank_andWaitsForTargetUrl() = runBlocking {
+    val tab = tabManager.createTab("about:blank")
+    val tabId = tab.id
+    val settings = GeckoSessionSettings.Builder().usePrivateMode(true).build()
+    val session = GeckoSession(settings)
+    manager.setSessionForTesting(tabId, session)
+
+    val loadedUrls = mutableListOf<String>()
+    manager.uriLoaderForTest = { _, _, url -> loadedUrls.add(url) }
+
+    val geckoView = GeckoView(context).apply { tag = tabId }
+    manager.attachView(
+      tabId = tabId,
+      geckoView = geckoView,
+      profile = PrivacyProfile.SHIELD,
+      isDesktopMode = false,
+      callbacks = dummyCallbacks,
+    )
+
+    val targetUrl = "https://example.com/target-page"
+    manager.loadUrl(tabId, targetUrl)
+    loadedUrls.clear()
+
+    // Process kill occurs
+    session.contentDelegate?.onKill(session)
+    assertTrue("Recovery should be active", manager.hasActiveRecovery(tabId))
+    assertEquals("Recovery should dispatch target URL", 1, loadedUrls.size)
+    assertEquals(targetUrl, loadedUrls[0])
+
+    // Gecko docshell initialization emits transient about:blank
+    session.navigationDelegate?.onLocationChange(session, "about:blank", mutableListOf(), false)
+    session.progressDelegate?.onPageStop(session, true)
+
+    // Invariant: Recovery MUST NOT be marked SUCCESS or FAILED by about:blank docshell stop!
+    assertTrue("Recovery MUST still be active after docshell about:blank", manager.hasActiveRecovery(tabId))
+
+    // Now actual target URL location change and stop arrive
+    session.navigationDelegate?.onLocationChange(session, targetUrl, mutableListOf(), false)
+    session.progressDelegate?.onPageStop(session, true)
+
+    assertFalse("Recovery must now be closed after target URL success", manager.hasActiveRecovery(tabId))
+    val logs = DebugLogManager.getCurrentSessionEvents().joinToString("\n")
+    assertTrue("Logs must contain CONTENT_RECOVERY_NAV_SUCCESS", logs.contains("[CONTENT_RECOVERY_NAV_SUCCESS]"))
+  }
+
+  /**
+   * STEP 14 Test: In-page link navigation (e.g. clicking search result on DuckDuckGo)
+   * must update recovery target URL and increment generation, ensuring recovery reloads the clicked page,
+   * not the previous search engine query.
+   */
+  @Test
+  fun testInPageLinkNavigation_updatesRecoveryTargetAndIncrementsGeneration() = runBlocking {
+    val tab = tabManager.createTab("about:blank")
+    val tabId = tab.id
+    val settings = GeckoSessionSettings.Builder().usePrivateMode(true).build()
+    val session = GeckoSession(settings)
+    manager.setSessionForTesting(tabId, session)
+
+    val loadedUrls = mutableListOf<String>()
+    manager.uriLoaderForTest = { _, _, url -> loadedUrls.add(url) }
+
+    val geckoView = GeckoView(context).apply { tag = tabId }
+    manager.attachView(
+      tabId = tabId,
+      geckoView = geckoView,
+      profile = PrivacyProfile.SHIELD,
+      isDesktopMode = false,
+      callbacks = dummyCallbacks,
+    )
+
+    // User initially loads search page
+    val searchUrl = "https://duckduckgo.com/?q=android"
+    manager.loadUrl(tabId, searchUrl)
+    loadedUrls.clear()
+
+    // User clicks an external result on the page: in-page navigation fires onLocationChange
+    val externalUrl = "https://developer.android.com/"
+    session.navigationDelegate?.onLocationChange(session, externalUrl, mutableListOf(), false)
+    session.progressDelegate?.onPageStop(session, true)
+
+    // Now process is killed on the external page
+    session.contentDelegate?.onKill(session)
+
+    assertEquals("Recovery MUST load the clicked external page, NOT the search page", 1, loadedUrls.size)
+    assertEquals(externalUrl, loadedUrls[0])
+    assertTrue("Recovery should be active for external URL", manager.hasActiveRecovery(tabId))
+  }
+
+  /**
+   * STEP 14 Test: Duplicate navigation check does not suppress navigation when session is closed or docshell is blank.
+   */
+  @Test
+  fun testDuplicateNavigationCheck_doesNotSuppressWhenSessionClosed() = runBlocking {
+    val tab = tabManager.createTab("about:blank")
+    val tabId = tab.id
+    val settings = GeckoSessionSettings.Builder().usePrivateMode(true).build()
+    val session = GeckoSession(settings)
+    manager.setSessionForTesting(tabId, session)
+
+    val loadedUrls = mutableListOf<String>()
+    manager.uriLoaderForTest = { _, _, url -> loadedUrls.add(url) }
+
+    val geckoView = GeckoView(context).apply { tag = tabId }
+    manager.attachView(
+      tabId = tabId,
+      geckoView = geckoView,
+      profile = PrivacyProfile.SHIELD,
+      isDesktopMode = false,
+      callbacks = dummyCallbacks,
+    )
+
+    val testUrl = "https://example.com/retry"
+    manager.loadUrl(tabId, testUrl)
+    assertEquals(1, loadedUrls.size)
+    assertEquals(testUrl, loadedUrls[0])
+
+    // Simulate session closed (e.g. process termination or crash)
+    manager.sessionOpenerForTest = { s, r -> /* mock open */ }
+    session.contentDelegate?.onKill(session)
+    loadedUrls.clear()
+
+    // Subsequent loadUrl of the same URL must NOT be suppressed by duplicate check
+    manager.loadUrl(tabId, testUrl)
+    assertEquals("Should dispatch loadUrl even if previously dispatched because session had terminated", 1, loadedUrls.size)
+    assertEquals(testUrl, loadedUrls[0])
+  }
+
+  /**
+   * STEP 14 Test: Synchronous detach cleans up ownership before clearing view tag, preventing invariant violations.
+   */
+  @Test
+  fun testViewDetachSync_cleansUpOwnershipBeforeClearingTag_noInvariantViolation() = runBlocking {
+    val tab = tabManager.createTab("about:blank")
+    val tabId = tab.id
+    val settings = GeckoSessionSettings.Builder().usePrivateMode(true).build()
+    val session = GeckoSession(settings)
+    manager.setSessionForTesting(tabId, session)
+
+    val geckoView = GeckoView(context).apply { tag = tabId }
+    manager.attachView(
+      tabId = tabId,
+      geckoView = geckoView,
+      profile = PrivacyProfile.SHIELD,
+      isDesktopMode = false,
+      callbacks = dummyCallbacks,
+    )
+
+    assertTrue("View must be attached", manager.isViewAttached(tabId))
+    assertEquals(tabId, geckoView.tag)
+
+    DebugLogManager.clear()
+    manager.detachViewSync(tabId, geckoView)
+
+    assertFalse("View must be detached", manager.isViewAttached(tabId))
+    assertNull("GeckoView tag must be cleared after detach", geckoView.tag)
+
+    val logs = DebugLogManager.getCurrentSessionEvents().joinToString("\n")
+    assertFalse("Invariant violation must NOT be logged during detach", logs.contains("[VIEW_INVARIANT_VIOLATION]"))
   }
 }

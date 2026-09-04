@@ -563,8 +563,8 @@ class GeckoEngineManager private constructor(private val context: Context) {
         Log.i(TAG, navLocMsg)
         com.remmi.browser.util.DebugLogManager.log(navLocMsg)
 
-        url?.let {
-          lastObservedUrls[tabId] = it
+        if (url != null && url.isNotBlank() && url != "about:blank") {
+          lastObservedUrls[tabId] = url
         }
 
         // Recovery In-Flight Detection
@@ -588,6 +588,18 @@ class GeckoEngineManager private constructor(private val context: Context) {
               Log.i(TAG, inFlightMsg)
               com.remmi.browser.util.DebugLogManager.log(inFlightMsg)
             }
+          }
+        } else if (activeRecovery == null && url != null && url.isNotBlank() && url != "about:blank" && !url.startsWith("remmi://")) {
+          // Normal user / in-page link navigation (e.g. clicking search result): advance generation and clear stale recovery suppression
+          val prevUrl = lastDispatchedUrls[tabId]
+          if (prevUrl != url) {
+            lastDispatchedUrls[tabId] = url
+            val newGen = (navGenerations[tabId] ?: 0L) + 1L
+            navGenerations[tabId] = newGen
+            lastRecoveredGenerations.remove(tabId)
+            val inPageMsg = "[FORENSIC][IN_PAGE_NAV] tabId=$tabId session=$sessId url=$url prevUrl=$prevUrl newGen=$newGen elapsedRealtime=$now"
+            Log.i(TAG, inPageMsg)
+            com.remmi.browser.util.DebugLogManager.log(inPageMsg)
           }
         }
 
@@ -670,6 +682,7 @@ class GeckoEngineManager private constructor(private val context: Context) {
             activeRecovery.timeoutRunnable?.let { mainHandler.removeCallbacks(it) }
             activeRecovery.stage = RecoveryStage.SUCCESS
             activeRecoveries.remove(tabId)
+            lastRecoveredGenerations.remove(tabId)
             val succMsg = "[FORENSIC][CONTENT_RECOVERY_NAV_SUCCESS] tabId=$tabId session=$sessId view=$viewId url=$currUrl targetUrl=${activeRecovery.targetUrl} gen=$gen elapsedRealtime=$now"
             Log.i(TAG, succMsg)
             com.remmi.browser.util.DebugLogManager.log(succMsg)
@@ -683,8 +696,12 @@ class GeckoEngineManager private constructor(private val context: Context) {
           }
         }
 
-        sessionCallbacks[tabId]?.onLoadingChange(false)
-        sessionCallbacks[tabId]?.onProgressChange(100)
+        val activeRec = activeRecoveries[tabId]
+        val isTransientAboutBlank = (currUrl == "about:blank" && activeRec != null && activeRec.stage == RecoveryStage.DISPATCHED)
+        if (!isTransientAboutBlank) {
+          sessionCallbacks[tabId]?.onLoadingChange(false)
+          sessionCallbacks[tabId]?.onProgressChange(100)
+        }
       }
 
       override fun onProgressChange(session: GeckoSession, progress: Int) {
@@ -840,7 +857,10 @@ class GeckoEngineManager private constructor(private val context: Context) {
     val sessId = "0x" + Integer.toHexString(System.identityHashCode(session))
     val threadName = Thread.currentThread().name
     
-    if (lastDispatchedUrls[tabId] == pending.url) {
+    val isRecoveryActive = activeRecoveries.containsKey(tabId) || pendingContentRecoveries.containsKey(tabId)
+    val isActualDuplicate = (lastDispatchedUrls[tabId] == pending.url) && !isRecoveryActive
+
+    if (isActualDuplicate) {
       val skipMsg = "[FORENSIC] [GECKO_NAV_SKIPPED_DUPLICATE] tabId=$tabId session=$sessId gen=${pending.generation} url=${pending.url} thread=$threadName"
       Log.i(TAG, skipMsg)
       com.remmi.browser.util.DebugLogManager.log(skipMsg)
@@ -893,9 +913,16 @@ class GeckoEngineManager private constructor(private val context: Context) {
     val sessId = "0x" + Integer.toHexString(System.identityHashCode(session))
     val view = attachedViews[tabId]
     val viewId = view?.let { "0x" + Integer.toHexString(System.identityHashCode(it)) } ?: "none"
-    val currUrl = lastDispatchedUrls[tabId] ?: TabManager.getInstance().getTab(tabId)?.url ?: ""
+    val currUrl = lastObservedUrls[tabId]?.takeIf { it.isNotBlank() && it != "about:blank" && !it.startsWith("remmi://") }
+      ?: TabManager.getInstance().getTab(tabId)?.url?.takeIf { it.isNotBlank() && it != "about:blank" && !it.startsWith("remmi://") }
+      ?: lastDispatchedUrls[tabId]?.takeIf { it.isNotBlank() && it != "about:blank" && !it.startsWith("remmi://") }
+      ?: ""
     val gen = navGenerations[tabId] ?: 0L
     val now = android.os.SystemClock.elapsedRealtime()
+
+    if (currUrl.isNotBlank()) {
+      lastDispatchedUrls[tabId] = currUrl
+    }
 
     val inFlightRecovery = activeRecoveries.remove(tabId)
     if (inFlightRecovery != null) {
@@ -903,6 +930,7 @@ class GeckoEngineManager private constructor(private val context: Context) {
       val crashInFlightMsg = "[FORENSIC][CONTENT_RECOVERY_CRASH_IN_FLIGHT] tabId=$tabId session=$sessId view=$viewId url=${inFlightRecovery.targetUrl} gen=${inFlightRecovery.generation} stage=${inFlightRecovery.stage} termination=$terminationType elapsedRealtime=$now"
       Log.e(TAG, crashInFlightMsg)
       com.remmi.browser.util.DebugLogManager.log(crashInFlightMsg)
+      lastRecoveredGenerations[tabId] = gen
     }
 
     // 1. Verify active session ownership (only recover if this session is the active session for the tab)
@@ -1050,7 +1078,12 @@ class GeckoEngineManager private constructor(private val context: Context) {
     }
 
     // Verify URL validity
-    val targetUrl = pendingRecovery.url.ifBlank { lastDispatchedUrls[tabId] ?: "" }
+    val targetUrl = pendingRecovery.url.ifBlank {
+      lastObservedUrls[tabId]?.takeIf { it.isNotBlank() && it != "about:blank" && !it.startsWith("remmi://") }
+        ?: TabManager.getInstance().getTab(tabId)?.url?.takeIf { it.isNotBlank() && it != "about:blank" && !it.startsWith("remmi://") }
+        ?: lastDispatchedUrls[tabId]?.takeIf { it.isNotBlank() && it != "about:blank" && !it.startsWith("remmi://") }
+        ?: ""
+    }
     if (targetUrl.isBlank() || targetUrl == "about:blank" || targetUrl.startsWith("remmi://")) {
       pendingContentRecoveries.remove(tabId)
       val suppMsg = "[FORENSIC][CONTENT_RECOVERY_SUPPRESSED] tabId=$tabId session=$sessId view=$viewId url=$targetUrl gen=${pendingRecovery.generation} reason=invalid_or_blank_url elapsedRealtime=$now"
@@ -1069,6 +1102,7 @@ class GeckoEngineManager private constructor(private val context: Context) {
       return
     }
 
+    lastDispatchedUrls[tabId] = targetUrl
     val resumeMsg = "[FORENSIC][CONTENT_RECOVERY_RESUME] tabId=$tabId session=$sessId view=$viewId url=$targetUrl gen=${pendingRecovery.generation} termination=${pendingRecovery.terminationType} elapsedRealtime=$now"
     Log.i(TAG, resumeMsg)
     com.remmi.browser.util.DebugLogManager.log(resumeMsg)
@@ -1254,11 +1288,11 @@ class GeckoEngineManager private constructor(private val context: Context) {
     }
   }
 
-  suspend fun detachView(
+  fun detachViewSync(
     tabId: String,
     geckoView: GeckoView? = null,
-  ) = withContext(Dispatchers.Main.immediate) {
-    assertMainThread("DETACH_VIEW id=$tabId")
+  ) {
+    assertMainThread("DETACH_VIEW_SYNC id=$tabId")
     val session = activeSessions[tabId]
     val sessId = session?.let { "0x" + Integer.toHexString(System.identityHashCode(it)) } ?: "none"
     val gvId = geckoView?.let { "0x" + Integer.toHexString(System.identityHashCode(it)) } ?: "none"
@@ -1278,7 +1312,10 @@ class GeckoEngineManager private constructor(private val context: Context) {
     } catch (e: Exception) {
       Log.w(TAG, "[GECKO] releaseSession error: ${e.message}")
     }
-    withSession(tabId, "DETACH_SET_INACTIVE") { sessionObj ->
+    // Tag is only cleared after ownership removal to prevent invariant violations
+    geckoView?.tag = null
+
+    onMainSession(tabId, "DETACH_SET_INACTIVE") { sessionObj ->
       try {
         sessionObj.setActive(false)
       } catch (e: Exception) {
@@ -1286,6 +1323,13 @@ class GeckoEngineManager private constructor(private val context: Context) {
       }
     }
     checkViewInvariants(tabId, "DETACH_DONE")
+  }
+
+  suspend fun detachView(
+    tabId: String,
+    geckoView: GeckoView? = null,
+  ) = withContext(Dispatchers.Main.immediate) {
+    detachViewSync(tabId, geckoView)
   }
 
   suspend fun setTabActive(tabId: String, active: Boolean) = withContext(Dispatchers.Main.immediate) {
@@ -1363,6 +1407,7 @@ class GeckoEngineManager private constructor(private val context: Context) {
       Log.i(TAG, superMsg)
       com.remmi.browser.util.DebugLogManager.log(superMsg)
     }
+    lastRecoveredGenerations.remove(tabId)
 
     if (_initState.value == GeckoInitState.NOT_STARTED) {
       Log.d(TAG, "[GECKO] loadUrl requesting init on tabId=$tabId")
@@ -1392,7 +1437,10 @@ class GeckoEngineManager private constructor(private val context: Context) {
     }
     val currentSessId = "0x" + Integer.toHexString(System.identityHashCode(currentSession))
 
-    if (lastDispatchedUrls[tabId] == targetUrl) {
+    val isRecoveryActive = activeRecovery != null || pendingContentRecoveries.containsKey(tabId)
+    val isActualDuplicate = (lastDispatchedUrls[tabId] == targetUrl) && !isRecoveryActive
+
+    if (isActualDuplicate) {
       val skipMsg = "[FORENSIC] [GECKO_NAV_SKIPPED_DUPLICATE] tabId=$tabId session=$currentSessId gen=$gen url=$targetUrl thread=$threadName"
       Log.i(TAG, skipMsg)
       com.remmi.browser.util.DebugLogManager.log(skipMsg)

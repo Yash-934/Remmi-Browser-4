@@ -302,12 +302,12 @@ fun BrowserView(
 
           if (!isTagMatch) {
             val oldTabId = prevTag
-            geckoView.tag = tab.id
             geckoView.visibility = View.VISIBLE
             scope.launch {
               if (oldTabId != null) {
                 geckoEngine.detachView(oldTabId, geckoView)
               }
+              geckoView.tag = tab.id
               geckoEngine.attachView(
                 tabId = tab.id,
                 geckoView = geckoView,
@@ -330,10 +330,8 @@ fun BrowserView(
 
           com.remmi.browser.engine.TabThumbnailManager.getInstance(context).captureGeckoView(tab.id, geckoView)
           geckoViewRef = null
-          geckoView.tag = null
-          scope.launch {
-            geckoEngine.detachView(currentTag, geckoView)
-          }
+          // Synchronous detach cleanly removes ownership from attachedViews before clearing view tag
+          geckoEngine.detachViewSync(currentTag, geckoView)
         },
         modifier = Modifier
           .fillMaxSize()
