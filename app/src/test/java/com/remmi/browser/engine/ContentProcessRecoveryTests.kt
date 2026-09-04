@@ -1628,4 +1628,65 @@ class ContentProcessRecoveryTests {
     session.navigationDelegate?.onLocationChange(session, "remmi://newtab", mutableListOf<GeckoSession.PermissionDelegate.ContentPermission>(), false)
     assertEquals("remmi: internal URL must not increment generation", genBefore, manager.getNavGeneration(tabId))
   }
+
+  @Test
+  fun testStep24_sameHostSpaStateChange_withoutUserGesture_doesNotIncrementGeneration() = runBlocking {
+    val tab = tabManager.createTab("about:blank")
+    val tabId = tab.id
+    val settings = GeckoSessionSettings.Builder().usePrivateMode(true).build()
+    val session = GeckoSession(settings)
+    manager.setSessionForTesting(tabId, session)
+
+    val geckoView = GeckoView(context).apply { tag = tabId }
+    manager.attachView(
+      tabId = tabId,
+      geckoView = geckoView,
+      profile = PrivacyProfile.SHIELD,
+      isDesktopMode = false,
+      callbacks = dummyCallbacks,
+    )
+
+    // 1. Initial search load establishes generation 1
+    val initialSearchUrl = "https://duckduckgo.com/?q=android"
+    manager.loadUrl(tabId, initialSearchUrl)
+    session.navigationDelegate?.onLocationChange(session, initialSearchUrl, mutableListOf<GeckoSession.PermissionDelegate.ContentPermission>(), false)
+    val genAtSearch = manager.getNavGeneration(tabId)
+    assertEquals(1L, genAtSearch)
+
+    // 2. DuckDuckGo client-side SPA script updates URL with additional parameters via replaceState/pushState without user gesture
+    val spaUpdatedUrl = "https://duckduckgo.com/?q=android&t=h_&ia=web"
+    session.navigationDelegate?.onLocationChange(session, spaUpdatedUrl, mutableListOf<GeckoSession.PermissionDelegate.ContentPermission>(), false)
+    assertEquals("Same-host SPA script URL rewrite must NOT increment generation", genAtSearch, manager.getNavGeneration(tabId))
+
+    // 3. Another query state change by SPA script arrives without user gesture
+    val secondSpaUrl = "https://duckduckgo.com/?q=android&t=h_&ia=web&rut=1"
+    session.navigationDelegate?.onLocationChange(session, secondSpaUrl, mutableListOf<GeckoSession.PermissionDelegate.ContentPermission>(), false)
+    assertEquals("Subsequent SPA script URL rewrite must NOT increment generation", genAtSearch, manager.getNavGeneration(tabId))
+
+    // 4. User actually clicks a search result to an external site (different host)
+    val resultUrl = "https://adblock.turtlecute.org/"
+    session.navigationDelegate?.onLocationChange(session, resultUrl, mutableListOf<GeckoSession.PermissionDelegate.ContentPermission>(), false)
+    val genAfterResultClick = manager.getNavGeneration(tabId)
+    assertEquals("Cross-host genuine link click must advance generation by exactly 1", genAtSearch + 1L, genAfterResultClick)
+  }
+
+  @Test
+  fun testStep24_isDifferentHost_verification() {
+    assertFalse(
+      "Same domain with different query parameters must be recognized as same host",
+      manager.isDifferentHost("https://duckduckgo.com/?q=android", "https://duckduckgo.com/?q=android&t=h_&ia=web")
+    )
+    assertFalse(
+      "www prefix difference must be normalized to same host",
+      manager.isDifferentHost("https://www.duckduckgo.com/?q=android", "https://duckduckgo.com/?q=android&ia=web")
+    )
+    assertTrue(
+      "Different domains must be recognized as different hosts",
+      manager.isDifferentHost("https://duckduckgo.com/?q=android", "https://adblock.turtlecute.org/")
+    )
+    assertFalse(
+      "Same host with different path must be recognized as same host",
+      manager.isDifferentHost("https://en.wikipedia.org/wiki/Android", "https://en.wikipedia.org/wiki/Linux")
+    )
+  }
 }

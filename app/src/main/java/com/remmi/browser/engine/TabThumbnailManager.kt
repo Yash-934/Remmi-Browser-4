@@ -94,6 +94,16 @@ class TabThumbnailManager private constructor(private val context: Context) {
   }
 
   fun captureGeckoView(tabId: String, geckoView: GeckoView) {
+    val session = geckoView.session
+    val sessId = session?.let { "0x" + Integer.toHexString(System.identityHashCode(it)) } ?: "none"
+    val gvId = "0x" + Integer.toHexString(System.identityHashCode(geckoView))
+    val isOpen = session?.isOpen == true
+    val now = android.os.SystemClock.elapsedRealtime()
+    val msg = "[FORENSIC][CAPTURE_PIXELS] tabId=$tabId view=$gvId session=$sessId isOpen=$isOpen elapsedRealtime=$now"
+    Log.i(TAG, msg)
+    com.remmi.browser.util.DebugLogManager.log(msg)
+    if (!isOpen) return
+
     try {
       geckoView.capturePixels()
         .accept(

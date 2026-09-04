@@ -301,6 +301,8 @@ fun BrowserView(
           com.remmi.browser.util.DebugLogManager.log(updateMsg)
 
           if (!isTagMatch) {
+            geckoEngine.logDestructiveOp("TAG_MISMATCH_DETACH", tab.id, null, geckoView, tab.url, "update isTagMatch=false prevTag=$prevTag")
+            geckoEngine.checkPostNavFailure(tab.id, "TAG_MISMATCH_DETACH", tab.url)
             val oldTabId = prevTag
             geckoView.visibility = View.VISIBLE
             scope.launch {
@@ -327,6 +329,9 @@ fun BrowserView(
           val relMsg = "[FORENSIC][VIEW_ON_RELEASE] tabId=${tab.id} view=$gvId tag=$currentTag url=${tab.url} elapsedRealtime=$now"
           android.util.Log.i("BrowserView", relMsg)
           com.remmi.browser.util.DebugLogManager.log(relMsg)
+
+          geckoEngine.logDestructiveOp("VIEW_ON_RELEASE", tab.id, null, geckoView, tab.url, "AndroidView.onRelease")
+          geckoEngine.checkPostNavFailure(tab.id, "VIEW_ON_RELEASE", tab.url)
 
           com.remmi.browser.engine.TabThumbnailManager.getInstance(context).captureGeckoView(tab.id, geckoView)
           geckoViewRef = null
