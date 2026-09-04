@@ -1,0 +1,146 @@
+name: Build Native Android
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up JDK 21
+      uses: actions/setup-java@v4
+      with:
+        java-version: '21'
+        distribution: 'temurin'
+        cache: gradle
+
+    - name: Set up Android SDK
+      uses: android-actions/setup-android@v3
+
+    - name: Install Android NDK 25.1.8937393
+      run: |
+        ${ANDROID_SDK_ROOT:-$ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager --install "ndk;25.1.8937393" || sdkmanager "ndk;25.1.8937393"
+        echo "ANDROID_NDK_HOME=${ANDROID_SDK_ROOT:-$ANDROID_HOME}/ndk/25.1.8937393" >> $GITHUB_ENV
+
+    - name: Set up Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: aarch64-linux-android, armv7-linux-androideabi, x86_64-linux-android
+
+    - name: Install cargo-ndk
+      run: cargo install cargo-ndk
+
+    - name: Cache cargo registry and build cache
+      uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: rust
+
+    - name: Build Native Rust Library
+      env:
+        GIT_COMMIT_SHA: ${{ github.sha }}
+      run: |
+        chmod +x ./tools/build-rust-android.sh
+        bash ./tools/build-rust-android.sh
+
+    - name: Verify Fresh Native Libraries Generated
+      run: |
+        for abi in arm64-v8a armeabi-v7a x86_64; do
+          if [ ! -f "app/src/main/jniLibs/$abi/libadblock_rust.so" ]; then
+            echo "ERROR: Missing compiled library for $abi!"
+            exit 1
+          fi
+          echo "Freshly compiled $abi SHA256:"
+          sha256sum "app/src/main/jniLibs/$abi/libadblock_rust.so"
+        done
+
+    - name: Grant execute permission for gradlew
+      run: chmod +x gradlew
+
+    - name: Generate debug keystore
+      run: |
+        keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+
+    - name: Build Android APK
+      run: ./gradlew assembleDebug
+
+    - name: Extract and Verify APK Native Libraries (SHA256 Match & Stale Detection)
+      run: |
+        APK_FILES=$(find app/build/outputs/apk/debug -name "*.apk")
+        if [ -z "$APK_FILES" ]; then
+          echo "ERROR: No APK found after assembleDebug!"
+          exit 1
+        fi
+        
+        for APK_FILE in $APK_FILES; do
+          echo "Inspecting APK: $APK_FILE"
+          EXTRACT_DIR="/tmp/apk_libs_extract_$(basename $APK_FILE .apk)"
+          rm -rf "$EXTRACT_DIR"
+          mkdir -p "$EXTRACT_DIR"
+          unzip -q "$APK_FILE" -d "$EXTRACT_DIR"
+
+          for APK_LIB in $(find "$EXTRACT_DIR/lib" -name "libadblock_rust.so" 2>/dev/null || true); do
+            abi=$(basename $(dirname "$APK_LIB"))
+            FRESH_LIB="app/src/main/jniLibs/$abi/libadblock_rust.so"
+            if [ ! -f "$FRESH_LIB" ]; then
+              echo "ERROR: Found ABI $abi in APK but no fresh library exists!"
+              exit 1
+            fi
+            FRESH_HASH=$(sha256sum "$FRESH_LIB" | awk '{print $1}')
+            APK_HASH=$(sha256sum "$APK_LIB" | awk '{print $1}')
+            echo "ABI $abi -> Fresh: $FRESH_HASH | APK: $APK_HASH"
+            if [ "$FRESH_HASH" != "$APK_HASH" ]; then
+              echo "FATAL ERROR: Packaged library in APK does not match freshly compiled library for $abi!"
+              exit 1
+            fi
+          done
+        done
+        echo "SUCCESS: All native libraries in APK(s) match freshly compiled binaries."
+
+    - name: Cache Robolectric Android-All JARs
+      uses: actions/cache@v4
+      with:
+        path: ~/.m2/repository/org/robolectric/android-all-instrumented
+        key: robolectric-android-all-jars-v1
+
+    - name: Pre-fetch Robolectric Android-All JARs
+      run: |
+        rm -f ~/.m2/settings.xml
+        M2_DIR="$HOME/.m2/repository/org/robolectric/android-all-instrumented"
+        
+        # SDK 34 (Android 14)
+        SDK34_DIR="$M2_DIR/14-robolectric-10818077-i7"
+        if [ ! -f "$SDK34_DIR/android-all-instrumented-14-robolectric-10818077-i7.jar" ]; then
+          mkdir -p "$SDK34_DIR"
+          curl -sSL -A "Mozilla/5.0" "https://repo1.maven.org/maven2/org/robolectric/android-all-instrumented/14-robolectric-10818077-i7/android-all-instrumented-14-robolectric-10818077-i7.pom" -o "$SDK34_DIR/android-all-instrumented-14-robolectric-10818077-i7.pom"
+          curl -sSL -A "Mozilla/5.0" "https://repo1.maven.org/maven2/org/robolectric/android-all-instrumented/14-robolectric-10818077-i7/android-all-instrumented-14-robolectric-10818077-i7.pom.sha512" -o "$SDK34_DIR/android-all-instrumented-14-robolectric-10818077-i7.pom.sha512"
+          curl -sSL -A "Mozilla/5.0" "https://repo1.maven.org/maven2/org/robolectric/android-all-instrumented/14-robolectric-10818077-i7/android-all-instrumented-14-robolectric-10818077-i7.jar.sha512" -o "$SDK34_DIR/android-all-instrumented-14-robolectric-10818077-i7.jar.sha512"
+          curl -sSL -A "Mozilla/5.0" "https://repo1.maven.org/maven2/org/robolectric/android-all-instrumented/14-robolectric-10818077-i7/android-all-instrumented-14-robolectric-10818077-i7.jar" -o "$SDK34_DIR/android-all-instrumented-14-robolectric-10818077-i7.jar"
+        fi
+
+        # SDK 33 (Android 13)
+        SDK33_DIR="$M2_DIR/13-robolectric-9030017-i7"
+        if [ ! -f "$SDK33_DIR/android-all-instrumented-13-robolectric-9030017-i7.jar" ]; then
+          mkdir -p "$SDK33_DIR"
+          curl -sSL -A "Mozilla/5.0" "https://repo1.maven.org/maven2/org/robolectric/android-all-instrumented/13-robolectric-9030017-i7/android-all-instrumented-13-robolectric-9030017-i7.pom" -o "$SDK33_DIR/android-all-instrumented-13-robolectric-9030017-i7.pom"
+          curl -sSL -A "Mozilla/5.0" "https://repo1.maven.org/maven2/org/robolectric/android-all-instrumented/13-robolectric-9030017-i7/android-all-instrumented-13-robolectric-9030017-i7.pom.sha512" -o "$SDK33_DIR/android-all-instrumented-13-robolectric-9030017-i7.pom.sha512"
+          curl -sSL -A "Mozilla/5.0" "https://repo1.maven.org/maven2/org/robolectric/android-all-instrumented/13-robolectric-9030017-i7/android-all-instrumented-13-robolectric-9030017-i7.jar.sha512" -o "$SDK33_DIR/android-all-instrumented-13-robolectric-9030017-i7.jar.sha512"
+          curl -sSL -A "Mozilla/5.0" "https://repo1.maven.org/maven2/org/robolectric/android-all-instrumented/13-robolectric-9030017-i7/android-all-instrumented-13-robolectric-9030017-i7.jar" -o "$SDK33_DIR/android-all-instrumented-13-robolectric-9030017-i7.jar"
+        fi
+
+    - name: Run Unit Tests
+      run: ./gradlew testDebugUnitTest
+
+    - name: Upload APK
+      uses: actions/upload-artifact@v4
+      with:
+        name: app-debug
+        path: app/build/outputs/apk/debug/*.apk
+

@@ -1,0 +1,32 @@
+{
+  "manifest_version": 2,
+  "name": "Remmi Engine Extension",
+  "version": "1.0",
+  "description": "GeckoView native blocking, tracker defense, and click transparency bridge for Remmi",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "extension@remmi.browser",
+      "strict_min_version": "100.0"
+    }
+  },
+  "permissions": [
+    "webRequest",
+    "webRequestBlocking",
+    "<all_urls>",
+    "nativeMessaging",
+    "geckoViewAddons",
+    "storage"
+  ],
+  "incognito": "spanning",
+  "background": {
+    "scripts": ["background.js"]
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["webrtc_block.js", "click_inspector.js", "cosmetic_filter.js"],
+      "run_at": "document_start",
+      "all_frames": true
+    }
+  ]
+}

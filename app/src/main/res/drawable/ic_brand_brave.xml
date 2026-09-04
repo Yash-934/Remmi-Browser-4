@@ -1,0 +1,13 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- Brave Lion / Orange Shield -->
+    <path
+        android:fillColor="#FB542B"
+        android:pathData="M12,2L4,6v5.5c0,5.2 3.4,10 8,11.5 4.6,-1.5 8,-6.3 8,-11.5V6L12,2z"/>
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M12,5.5l2.5,3.5h-5zM9,10l-1.5,2.5 2,2.5 2.5,-3zM15,10l-2,2 2.5,3 2,-2.5zM12,14l-2,3.5h4z"/>
+</vector>

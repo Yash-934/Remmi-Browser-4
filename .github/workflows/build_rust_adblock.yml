@@ -1,0 +1,44 @@
+name: Cross Compile Rust Adblock for Android
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android, armv7-linux-androideabi, x86_64-linux-android
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk
+
+      - name: Set up Android NDK
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r25c
+
+      - name: Build arm64-v8a
+        run: |
+          cd rust
+          cargo ndk -t arm64-v8a -o ../app/src/main/jniLibs build --release
+
+      - name: Build armeabi-v7a
+        run: |
+          cd rust
+          cargo ndk -t armeabi-v7a -o ../app/src/main/jniLibs build --release
+
+      - name: Build x86_64
+        run: |
+          cd rust
+          cargo ndk -t x86_64 -o ../app/src/main/jniLibs build --release
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: jniLibs
+          path: app/src/main/jniLibs/

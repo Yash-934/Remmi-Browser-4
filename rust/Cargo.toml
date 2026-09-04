@@ -1,0 +1,23 @@
+[package]
+name = "adblock_rust"
+version = "0.1.0"
+edition = "2021"
+build = "build.rs"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+adblock = { version = "0.8", default-features = false, features = ["embedded-domain-resolver"] }
+rmp = "=0.8.11"
+jni = { version = "0.21", default-features = false }
+lazy_static = "1.4"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tinyvec = "=1.8.1"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true

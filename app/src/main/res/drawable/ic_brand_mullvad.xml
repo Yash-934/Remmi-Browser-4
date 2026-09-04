@@ -1,0 +1,13 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- Mullvad Dark Blue Shield & Yellow Details -->
+    <path
+        android:fillColor="#112233"
+        android:pathData="M12,2C6.48,2 2,6.48 2,12s4.48,10 10,10 10,-4.48 10,-10S17.52,2 12,2z"/>
+    <path
+        android:fillColor="#FFE600"
+        android:pathData="M12,5a5,5 0 0,0 -5,5c0,2.8 2.2,5 5,5s5,-2.2 5,-5a5,5 0 0,0 -5,-5zm-2,4.5a1,1 0 1,1 0,-2 1,1 0 0,1 0,2zm4,0a1,1 0 1,1 0,-2 1,1 0 0,1 0,2zm-2,4.5c-1.1,0 -2,-0.5 -2,-1h4c0,0.5 -0.9,1 -2,1z"/>
+</vector>

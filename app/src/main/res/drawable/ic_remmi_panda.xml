@@ -1,0 +1,136 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- 1. Ambient Glow Star (Top Right) -->
+    <path
+        android:pathData="M88,24 L89.5,28.5 L94,30 L89.5,31.5 L88,36 L86.5,31.5 L82,30 L86.5,28.5 Z"
+        android:fillColor="#00E5FF" />
+
+    <!-- 2. Ambient Glow Star (Top Left) -->
+    <path
+        android:pathData="M20,26 L21,29.5 L24.5,30.5 L21,31.5 L20,35 L19,31.5 L15.5,30.5 L19,29.5 Z"
+        android:fillColor="#FFD700" />
+
+    <!-- 3. Left Ear Outer (Dark Charcoal) -->
+    <path
+        android:pathData="M32,29m-14,0a14,14 0 1,0 28,0a14,14 0 1,0 -28,0"
+        android:fillColor="#1E222A" />
+
+    <!-- 4. Left Ear Inner (Soft Slate) -->
+    <path
+        android:pathData="M32,29m-8,0a8,8 0 1,0 16,0a8,8 0 1,0 -16,0"
+        android:fillColor="#2E3440" />
+
+    <!-- 5. Right Ear Outer (Dark Charcoal) -->
+    <path
+        android:pathData="M76,29m-14,0a14,14 0 1,0 28,0a14,14 0 1,0 -28,0"
+        android:fillColor="#1E222A" />
+
+    <!-- 6. Right Ear Inner (Soft Slate) -->
+    <path
+        android:pathData="M76,29m-8,0a8,8 0 1,0 16,0a8,8 0 1,0 -16,0"
+        android:fillColor="#2E3440" />
+
+    <!-- 7. Panda Face Oval (Fluffy White Gradient) -->
+    <path
+        android:pathData="M54,23 C74,23 89,37 89,55 C89,73 74,86 54,86 C34,86 19,73 19,55 C19,37 34,23 54,23 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:centerX="54"
+                android:centerY="45"
+                android:gradientRadius="40"
+                android:type="radial">
+                <item android:color="#FFFFFF" android:offset="0.0" />
+                <item android:color="#F6F8FC" android:offset="0.7" />
+                <item android:color="#E2E8F0" android:offset="1.0" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- 8. Face Outline Stroke -->
+    <path
+        android:pathData="M54,23 C74,23 89,37 89,55 C89,73 74,86 54,86 C34,86 19,73 19,55 C19,37 34,23 54,23 Z"
+        android:strokeColor="#CBD5E1"
+        android:strokeWidth="1.2" />
+
+    <!-- 9. Left Eye Patch (Tilted Black Teardrop Oval) -->
+    <path
+        android:pathData="M39.5,41 C45.5,41.5 49.5,47 49,54 C48.5,61 43.5,65.5 37.5,65 C31.5,64.5 27.5,59 28,52 C28.5,45 33.5,40.5 39.5,41 Z"
+        android:fillColor="#1E222A" />
+
+    <!-- 10. Right Eye Patch (Tilted Black Teardrop Oval) -->
+    <path
+        android:pathData="M68.5,41 C74.5,40.5 79.5,45 80,52 C80.5,59 76.5,64.5 70.5,65 C64.5,65.5 59.5,61 59,54 C58.5,47 62.5,41.5 68.5,41 Z"
+        android:fillColor="#1E222A" />
+
+    <!-- 11. Left Eyeball (Deep Onyx) -->
+    <path
+        android:pathData="M39,53m-6,0a6,6 0 1,0 12,0a6,6 0 1,0 -12,0"
+        android:fillColor="#0F141C" />
+
+    <!-- 12. Left Major Eye Catchlight Sparkle -->
+    <path
+        android:pathData="M37.5,50m-2.4,0a2.4,2.4 0 1,0 4.8,0a2.4,2.4 0 1,0 -4.8,0"
+        android:fillColor="#FFFFFF" />
+
+    <!-- 13. Left Minor Eye Sparkle -->
+    <path
+        android:pathData="M41,55m-1.1,0a1.1,1.1 0 1,0 2.2,0a1.1,1.1 0 1,0 -2.2,0"
+        android:fillColor="#CCFFFFFF" />
+
+    <!-- 14. Right Eyeball (Deep Onyx) -->
+    <path
+        android:pathData="M69,53m-6,0a6,6 0 1,0 12,0a6,6 0 1,0 -12,0"
+        android:fillColor="#0F141C" />
+
+    <!-- 15. Right Major Eye Catchlight Sparkle -->
+    <path
+        android:pathData="M67.5,50m-2.4,0a2.4,2.4 0 1,0 4.8,0a2.4,2.4 0 1,0 -4.8,0"
+        android:fillColor="#FFFFFF" />
+
+    <!-- 16. Right Minor Eye Sparkle -->
+    <path
+        android:pathData="M71,55m-1.1,0a1.1,1.1 0 1,0 2.2,0a1.1,1.1 0 1,0 -2.2,0"
+        android:fillColor="#CCFFFFFF" />
+
+    <!-- 17. Left Rosy Cheek (Blushing Pink) -->
+    <path
+        android:pathData="M27,64m-5.5,0a5.5,5.5 0 1,0 11,0a5.5,5.5 0 1,0 -11,0"
+        android:fillColor="#70FF8FA3" />
+
+    <!-- 18. Right Rosy Cheek (Blushing Pink) -->
+    <path
+        android:pathData="M81,64m-5.5,0a5.5,5.5 0 1,0 11,0a5.5,5.5 0 1,0 -11,0"
+        android:fillColor="#70FF8FA3" />
+
+    <!-- 19. Cute Button Nose -->
+    <path
+        android:pathData="M54,58 C57,58 59,59.5 59,61.5 C59,63.5 57,64.5 54,64.5 C51,64.5 49,63.5 49,61.5 C49,59.5 51,58 54,58 Z"
+        android:fillColor="#1E222A" />
+
+    <!-- 20. Nose Gloss Highlight -->
+    <path
+        android:pathData="M53.5,59 C55,59 56,59.5 56,60 C56,60.5 55,61 53.5,61 C52,61 51,60.5 51,60 C51,59.5 52,59 53.5,59 Z"
+        android:fillColor="#99FFFFFF" />
+
+    <!-- 21. Happy Curved Smile -->
+    <path
+        android:pathData="M54,64.5 L54,67.5 M54,67.5 C50,71.5 45,71 43,67 M54,67.5 C58,71.5 63,71 65,67"
+        android:strokeColor="#1E222A"
+        android:strokeWidth="1.8"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+
+    <!-- 22. Cyber Cyan Remmi Badge / Bowtie Center -->
+    <path
+        android:pathData="M54,82m-4.5,0a4.5,4.5 0 1,0 9,0a4.5,4.5 0 1,0 -9,0"
+        android:fillColor="#00E5FF" />
+    <path
+        android:pathData="M54,82m-2,0a2,2 0 1,0 4,0a2,2 0 1,0 -4,0"
+        android:fillColor="#FFFFFF" />
+
+</vector>
