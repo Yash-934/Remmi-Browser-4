@@ -68,9 +68,10 @@ fun BrowserView(
   val downloadHandler = remember { DownloadHandler.getInstance(context) }
 
   var geckoViewRef by remember { mutableStateOf<GeckoView?>(null) }
-  var progressFloat by remember { mutableFloatStateOf(0f) }
+  var isCurrentlyLoading by remember(tab.id) { mutableStateOf(tab.isLoading) }
+  var progressFloat by remember(tab.id) { mutableFloatStateOf(0f) }
   val animatedProgress by animateFloatAsState(
-    targetValue = progressFloat,
+    targetValue = if (isCurrentlyLoading || tab.isLoading) progressFloat else 0f,
     label = "cyber_progress",
   )
 
@@ -90,11 +91,17 @@ fun BrowserView(
       }
 
       override fun onProgressChange(progress: Int) {
-        progressFloat = (progress.toFloat() / 100f).coerceIn(0f, 1f)
-        onProgressChange(progress)
+        if ((isCurrentlyLoading || tab.isLoading) && progress > 0) {
+          progressFloat = (progress.toFloat() / 100f).coerceIn(0f, 1f)
+          onProgressChange(progress)
+        } else {
+          progressFloat = 0f
+          onProgressChange(0)
+        }
       }
 
       override fun onLoadingChange(isLoading: Boolean) {
+        isCurrentlyLoading = isLoading
         onLoadingChange(isLoading)
         if (isLoading) {
           progressFloat = 0.1f
@@ -358,7 +365,7 @@ fun BrowserView(
     }
 
     // Top Glowing Cyber Progress Bar
-    if (tab.isLoading && animatedProgress > 0f) {
+    if ((tab.isLoading || isCurrentlyLoading) && progressFloat > 0f && animatedProgress > 0f) {
       LinearProgressIndicator(
         progress = { animatedProgress },
         modifier = Modifier

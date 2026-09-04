@@ -247,6 +247,9 @@ class AdblockBridge {
   var state: AdblockState = AdblockState.STARTING
     private set
 
+  @Volatile
+  var diagnosticBypassForTesting: Boolean = false
+
   private val initialized = AtomicBoolean(false)
   private val isInitializing = AtomicBoolean(false)
 
@@ -928,10 +931,6 @@ class AdblockBridge {
           com.remmi.browser.util.DebugLogManager.log(swapDoneMsg)
           Log.d(TAG, "[ADBLOCK_ENGINE_SWAP] oldGeneration=$oldGen newGeneration=$newGen rules=$compiledCount")
 
-          try {
-            BlockExtension.getInstance(this).notifyRulesUpdated()
-          } catch (_: Throwable) {}
-
           val currentJobId = jobId
           postSwapScheduler.schedule({
             val snap = com.remmi.browser.util.ProcessMemoryTelemetry.captureSnapshot()
@@ -964,6 +963,18 @@ class AdblockBridge {
     aggressive: Boolean = false
   ): CosmeticResources {
     val currentGen = getEngineGeneration()
+    if (diagnosticBypassForTesting) {
+      return CosmeticResources(
+        ok = true,
+        generation = currentGen,
+        hideSelectors = emptyList(),
+        forceHideSelectors = emptyList(),
+        procedural = emptyList(),
+        proceduralCount = 0,
+        generics = true,
+        error = null
+      )
+    }
     if (isNativeLoaded) {
       try {
         val classesJson = org.json.JSONArray(classes).toString()
@@ -1172,6 +1183,15 @@ class AdblockBridge {
       Log.d(TAG, "[NATIVE_MATCH_START] requestId=$requestId url=${url.take(60)}")
     }
     val currentGen = getEngineGeneration()
+
+    if (diagnosticBypassForTesting) {
+      return BlockDecision(
+        blocked = false,
+        ruleId = "diagnostic_bypass",
+        ruleSource = "DiagnosticMode",
+        engineGeneration = currentGen
+      )
+    }
     try {
       if (isNativeLoaded) {
         try {
