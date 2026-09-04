@@ -157,6 +157,7 @@ class GeckoEngineManager private constructor(private val context: Context) {
     val startTime: Long,
     var stage: RecoveryStage = RecoveryStage.DISPATCHED,
     var timeoutRunnable: Runnable? = null,
+    val redirectedUrls: MutableList<String> = mutableListOf(),
   )
 
   private val attachedViews = mutableMapOf<String, GeckoView>()
@@ -168,6 +169,8 @@ class GeckoEngineManager private constructor(private val context: Context) {
   private val activeRecoveries = mutableMapOf<String, ActiveRecovery>()
   private val lastDispatchedUrls = mutableMapOf<String, String>()
   private val lastObservedUrls = mutableMapOf<String, String>()
+  private val latestProgressUrls = mutableMapOf<String, String>()
+  private val latestLocationUrls = mutableMapOf<String, String>()
   private val dispatchedNavigationsHistory = mutableMapOf<String, MutableList<String>>()
 
   // Optional test hook for intercepting loadUri calls in JVM unit tests
@@ -206,6 +209,112 @@ class GeckoEngineManager private constructor(private val context: Context) {
     val toMsg = "[FORENSIC][CONTENT_RECOVERY_TIMEOUT] tabId=$tabId session=$sessId view=$viewId url=${active.targetUrl} gen=${active.generation} stage=DISPATCHED elapsedRealtime=${android.os.SystemClock.elapsedRealtime()}"
     Log.w(TAG, toMsg)
     com.remmi.browser.util.DebugLogManager.log(toMsg)
+  }
+
+  fun isInternalOrIgnoredUrl(url: String?): Boolean {
+    if (url.isNullOrBlank()) return true
+    val trimmed = url.trim()
+    if (trimmed.equals("about:blank", ignoreCase = true)) return true
+    if (trimmed.startsWith("about:", ignoreCase = true)) return true
+    if (trimmed.startsWith("remmi:", ignoreCase = true)) return true
+    if (trimmed.startsWith("chrome:", ignoreCase = true)) return true
+    if (trimmed.startsWith("resource:", ignoreCase = true)) return true
+    if (trimmed.startsWith("moz-extension:", ignoreCase = true)) return true
+    if (trimmed.equals("unknown", ignoreCase = true)) return true
+    return false
+  }
+
+  private fun parseUri(rawUrl: String): android.net.Uri? {
+    val clean = rawUrl.trim()
+    val withScheme = if (!clean.contains("://") && !clean.startsWith("about:") && !clean.startsWith("remmi:")) {
+      "https://$clean"
+    } else {
+      clean
+    }
+    return try {
+      android.net.Uri.parse(withScheme)
+    } catch (_: Exception) {
+      null
+    }
+  }
+
+  @VisibleForTesting
+  internal fun areUrlsEquivalent(url1: String?, url2: String?): Boolean {
+    if (url1.isNullOrBlank() || url2.isNullOrBlank()) return false
+    if (isInternalOrIgnoredUrl(url1) || isInternalOrIgnoredUrl(url2)) return false
+    if (url1 == url2) return true
+
+    val uri1 = parseUri(url1) ?: return false
+    val uri2 = parseUri(url2) ?: return false
+
+    val scheme1 = uri1.scheme?.lowercase() ?: ""
+    val scheme2 = uri2.scheme?.lowercase() ?: ""
+    val schemesCompatible = (scheme1 == scheme2) || 
+      ((scheme1 == "http" || scheme1 == "https") && (scheme2 == "http" || scheme2 == "https"))
+    if (!schemesCompatible) return false
+
+    val host1 = uri1.host?.lowercase() ?: ""
+    val host2 = uri2.host?.lowercase() ?: ""
+    if (host1.isEmpty() || host2.isEmpty()) return false
+    val hostsCompatible = (host1 == host2) || 
+      (host1 == host2.removePrefix("www.")) || 
+      (host2 == host1.removePrefix("www."))
+    if (!hostsCompatible) return false
+
+    val defaultPort1 = if (scheme1 == "http") 80 else if (scheme1 == "https") 443 else -1
+    val defaultPort2 = if (scheme2 == "http") 80 else if (scheme2 == "https") 443 else -1
+    val isDefaultPort1 = (uri1.port == -1 || uri1.port == defaultPort1)
+    val isDefaultPort2 = (uri2.port == -1 || uri2.port == defaultPort2)
+    if (isDefaultPort1 && isDefaultPort2) {
+      // Both use default ports for their respective schemes
+    } else if (uri1.port != uri2.port) {
+      return false
+    }
+
+    val path1 = (uri1.path ?: "").trimEnd('/')
+    val path2 = (uri2.path ?: "").trimEnd('/')
+    if (path1 != path2) return false
+
+    val query1 = uri1.query
+    val query2 = uri2.query
+    if (query1 != query2) {
+      if (query1 == null || query2 == null) return false
+      val names1 = try { uri1.queryParameterNames } catch (_: Exception) { null }
+      val names2 = try { uri2.queryParameterNames } catch (_: Exception) { null }
+      if (names1 == null || names2 == null || names1 != names2) return false
+      for (name in names1) {
+        val vals1 = uri1.getQueryParameters(name)
+        val vals2 = uri2.getQueryParameters(name)
+        if (vals1 != vals2) return false
+      }
+    }
+
+    return true
+  }
+
+  private fun isRecoveryTargetOrRedirect(url: String?, recovery: ActiveRecovery): Boolean {
+    if (url.isNullOrBlank() || isInternalOrIgnoredUrl(url)) return false
+    if (areUrlsEquivalent(url, recovery.targetUrl)) return true
+    for (redirectUrl in recovery.redirectedUrls) {
+      if (areUrlsEquivalent(url, redirectUrl)) return true
+    }
+    return false
+  }
+
+  @VisibleForTesting
+  internal fun recordRecoveryRedirect(tabId: String, redirectedUrl: String) {
+    val active = activeRecoveries[tabId] ?: return
+    if (!isInternalOrIgnoredUrl(redirectedUrl) && active.redirectedUrls.size < 10) {
+      if (!active.redirectedUrls.any { areUrlsEquivalent(it, redirectedUrl) }) {
+        active.redirectedUrls.add(redirectedUrl)
+        active.stage = RecoveryStage.NAV_IN_FLIGHT
+        lastObservedUrls[tabId] = redirectedUrl
+        val sessId = "0x" + Integer.toHexString(System.identityHashCode(active.session))
+        val redMsg = "[FORENSIC][CONTENT_RECOVERY_REDIRECT] tabId=$tabId session=$sessId url=$redirectedUrl targetUrl=${active.targetUrl} gen=${active.generation} redirectCount=${active.redirectedUrls.size} elapsedRealtime=${android.os.SystemClock.elapsedRealtime()}"
+        Log.i(TAG, redMsg)
+        com.remmi.browser.util.DebugLogManager.log(redMsg)
+      }
+    }
   }
 
   @VisibleForTesting
@@ -546,6 +655,16 @@ class GeckoEngineManager private constructor(private val context: Context) {
                 // proceed
             }
         }
+
+        val activeRecovery = activeRecoveries[tabId]
+        if (activeRecovery != null && 
+            activeRecovery.session === session && 
+            activeRecovery.generation == gen) {
+          if (request.isRedirect && url.isNotBlank() && !isInternalOrIgnoredUrl(url)) {
+            recordRecoveryRedirect(tabId, url)
+          }
+        }
+
         return GeckoResult.fromValue(AllowOrDeny.ALLOW)
       }
 
@@ -563,7 +682,10 @@ class GeckoEngineManager private constructor(private val context: Context) {
         Log.i(TAG, navLocMsg)
         com.remmi.browser.util.DebugLogManager.log(navLocMsg)
 
-        if (url != null && url.isNotBlank() && url != "about:blank") {
+        if (url != null) {
+          latestLocationUrls[tabId] = url
+        }
+        if (url != null && !isInternalOrIgnoredUrl(url)) {
           lastObservedUrls[tabId] = url
         }
 
@@ -571,17 +693,9 @@ class GeckoEngineManager private constructor(private val context: Context) {
         val activeRecovery = activeRecoveries[tabId]
         if (activeRecovery != null && 
             activeRecovery.session === session && 
-            activeRecovery.generation == gen && 
-            activeRecovery.stage == RecoveryStage.DISPATCHED) {
-          if (url != null && url.isNotBlank() && url != "about:blank") {
-            val isTargetMatch = (url == activeRecovery.targetUrl) || 
-                                url.startsWith(activeRecovery.targetUrl) ||
-                                try {
-                                  val activeHost = java.net.URI(if (activeRecovery.targetUrl.contains("://")) activeRecovery.targetUrl else "https://${activeRecovery.targetUrl}").host
-                                  val newHost = java.net.URI(if (url.contains("://")) url else "https://$url").host
-                                  !activeHost.isNullOrBlank() && activeHost.equals(newHost, ignoreCase = true)
-                                } catch (_: Exception) { false }
-
+            activeRecovery.generation == gen) {
+          if (url != null && !isInternalOrIgnoredUrl(url)) {
+            val isTargetMatch = isRecoveryTargetOrRedirect(url, activeRecovery)
             if (isTargetMatch) {
               activeRecovery.stage = RecoveryStage.NAV_IN_FLIGHT
               val inFlightMsg = "[FORENSIC][CONTENT_RECOVERY_NAV_IN_FLIGHT] tabId=$tabId session=$sessId view=$viewId url=$url targetUrl=${activeRecovery.targetUrl} gen=$gen elapsedRealtime=$now"
@@ -589,7 +703,7 @@ class GeckoEngineManager private constructor(private val context: Context) {
               com.remmi.browser.util.DebugLogManager.log(inFlightMsg)
             }
           }
-        } else if (activeRecovery == null && url != null && url.isNotBlank() && url != "about:blank" && !url.startsWith("remmi://")) {
+        } else if (activeRecovery == null && url != null && !isInternalOrIgnoredUrl(url)) {
           // Normal user / in-page link navigation (e.g. clicking search result): advance generation and clear stale recovery suppression
           val prevUrl = lastDispatchedUrls[tabId]
           if (prevUrl != url) {
@@ -646,9 +760,26 @@ class GeckoEngineManager private constructor(private val context: Context) {
         val viewId = attachedViews[tabId]?.let { "0x" + Integer.toHexString(System.identityHashCode(it)) } ?: "none"
         val gen = navGenerations[tabId] ?: 0L
         val now = android.os.SystemClock.elapsedRealtime()
+        latestProgressUrls[tabId] = url
         val progMsg = "[FORENSIC] [NAV_PROGRESS] tabId=$tabId session=$sessId view=$viewId url=$url progress=10 gen=$gen state=start elapsedRealtime=$now"
         Log.i(TAG, progMsg)
         com.remmi.browser.util.DebugLogManager.log(progMsg)
+
+        val activeRecovery = activeRecoveries[tabId]
+        if (activeRecovery != null && 
+            activeRecovery.session === session && 
+            activeRecovery.generation == gen && 
+            activeRecovery.stage == RecoveryStage.DISPATCHED) {
+          if (!isInternalOrIgnoredUrl(url)) {
+            val isTargetMatch = isRecoveryTargetOrRedirect(url, activeRecovery)
+            if (isTargetMatch) {
+              activeRecovery.stage = RecoveryStage.NAV_IN_FLIGHT
+              val inFlightMsg = "[FORENSIC][CONTENT_RECOVERY_NAV_IN_FLIGHT] tabId=$tabId session=$sessId view=$viewId url=$url targetUrl=${activeRecovery.targetUrl} gen=$gen elapsedRealtime=$now"
+              Log.i(TAG, inFlightMsg)
+              com.remmi.browser.util.DebugLogManager.log(inFlightMsg)
+            }
+          }
+        }
 
         sessionCallbacks[tabId]?.onLoadingChange(true)
         sessionCallbacks[tabId]?.onProgressChange(10)
@@ -665,20 +796,22 @@ class GeckoEngineManager private constructor(private val context: Context) {
         com.remmi.browser.util.DebugLogManager.log(stopMsg)
 
         val activeRecovery = activeRecoveries[tabId]
+        val latestLoc = latestLocationUrls[tabId]
+        val latestProg = latestProgressUrls[tabId]
+        val isAboutBlank = (currUrl == "about:blank" || latestLoc == "about:blank" || latestProg == "about:blank" || isInternalOrIgnoredUrl(currUrl))
+        if (latestLoc == "about:blank" || isInternalOrIgnoredUrl(latestLoc)) {
+          latestLocationUrls.remove(tabId)
+        }
+        if (latestProg == "about:blank" || isInternalOrIgnoredUrl(latestProg)) {
+          latestProgressUrls.remove(tabId)
+        }
+
         if (activeRecovery != null && 
             activeRecovery.session === session && 
             activeRecovery.generation == gen) {
-          val isAboutBlank = (currUrl == "about:blank")
-          
-          val targetMatches = (currUrl == activeRecovery.targetUrl) || 
-                              currUrl.startsWith(activeRecovery.targetUrl) ||
-                              try {
-                                val activeHost = java.net.URI(if (activeRecovery.targetUrl.contains("://")) activeRecovery.targetUrl else "https://${activeRecovery.targetUrl}").host
-                                val currHost = java.net.URI(if (currUrl.contains("://")) currUrl else "https://$currUrl").host
-                                !activeHost.isNullOrBlank() && activeHost.equals(currHost, ignoreCase = true)
-                              } catch (_: Exception) { false }
+          val targetMatches = !isAboutBlank && isRecoveryTargetOrRedirect(currUrl, activeRecovery)
 
-          if (success && activeRecovery.stage == RecoveryStage.NAV_IN_FLIGHT && targetMatches && !isAboutBlank) {
+          if (success && targetMatches) {
             activeRecovery.timeoutRunnable?.let { mainHandler.removeCallbacks(it) }
             activeRecovery.stage = RecoveryStage.SUCCESS
             activeRecoveries.remove(tabId)
@@ -686,10 +819,11 @@ class GeckoEngineManager private constructor(private val context: Context) {
             val succMsg = "[FORENSIC][CONTENT_RECOVERY_NAV_SUCCESS] tabId=$tabId session=$sessId view=$viewId url=$currUrl targetUrl=${activeRecovery.targetUrl} gen=$gen elapsedRealtime=$now"
             Log.i(TAG, succMsg)
             com.remmi.browser.util.DebugLogManager.log(succMsg)
-          } else if (!success && (activeRecovery.stage == RecoveryStage.NAV_IN_FLIGHT || targetMatches)) {
+          } else if (!success && targetMatches) {
             activeRecovery.timeoutRunnable?.let { mainHandler.removeCallbacks(it) }
             activeRecovery.stage = RecoveryStage.FAILED
             activeRecoveries.remove(tabId)
+            lastRecoveredGenerations[tabId] = gen
             val failMsg = "[FORENSIC][CONTENT_RECOVERY_NAV_FAILED] tabId=$tabId session=$sessId view=$viewId url=$currUrl targetUrl=${activeRecovery.targetUrl} gen=$gen success=$success elapsedRealtime=$now"
             Log.w(TAG, failMsg)
             com.remmi.browser.util.DebugLogManager.log(failMsg)
@@ -697,7 +831,10 @@ class GeckoEngineManager private constructor(private val context: Context) {
         }
 
         val activeRec = activeRecoveries[tabId]
-        val isTransientAboutBlank = (currUrl == "about:blank" && activeRec != null && activeRec.stage == RecoveryStage.DISPATCHED)
+        val isTransientAboutBlank = (isAboutBlank && 
+                                     activeRec != null && 
+                                     activeRec.stage != RecoveryStage.SUCCESS && 
+                                     activeRec.stage != RecoveryStage.FAILED)
         if (!isTransientAboutBlank) {
           sessionCallbacks[tabId]?.onLoadingChange(false)
           sessionCallbacks[tabId]?.onProgressChange(100)
@@ -1025,6 +1162,7 @@ class GeckoEngineManager private constructor(private val context: Context) {
         val current = activeRecoveries[tabId]
         if (current != null && current.generation == gen && current.stage != RecoveryStage.SUCCESS && current.stage != RecoveryStage.FAILED) {
           activeRecoveries.remove(tabId)
+          lastRecoveredGenerations[tabId] = gen
           val toMsg = "[FORENSIC][CONTENT_RECOVERY_TIMEOUT] tabId=$tabId session=$sessId view=$viewId url=$currUrl gen=$gen stage=${current.stage} elapsedRealtime=${android.os.SystemClock.elapsedRealtime()}"
           Log.w(TAG, toMsg)
           com.remmi.browser.util.DebugLogManager.log(toMsg)
@@ -1079,12 +1217,12 @@ class GeckoEngineManager private constructor(private val context: Context) {
 
     // Verify URL validity
     val targetUrl = pendingRecovery.url.ifBlank {
-      lastObservedUrls[tabId]?.takeIf { it.isNotBlank() && it != "about:blank" && !it.startsWith("remmi://") }
-        ?: TabManager.getInstance().getTab(tabId)?.url?.takeIf { it.isNotBlank() && it != "about:blank" && !it.startsWith("remmi://") }
-        ?: lastDispatchedUrls[tabId]?.takeIf { it.isNotBlank() && it != "about:blank" && !it.startsWith("remmi://") }
+      lastObservedUrls[tabId]?.takeIf { !isInternalOrIgnoredUrl(it) }
+        ?: TabManager.getInstance().getTab(tabId)?.url?.takeIf { !isInternalOrIgnoredUrl(it) }
+        ?: lastDispatchedUrls[tabId]?.takeIf { !isInternalOrIgnoredUrl(it) }
         ?: ""
     }
-    if (targetUrl.isBlank() || targetUrl == "about:blank" || targetUrl.startsWith("remmi://")) {
+    if (isInternalOrIgnoredUrl(targetUrl)) {
       pendingContentRecoveries.remove(tabId)
       val suppMsg = "[FORENSIC][CONTENT_RECOVERY_SUPPRESSED] tabId=$tabId session=$sessId view=$viewId url=$targetUrl gen=${pendingRecovery.generation} reason=invalid_or_blank_url elapsedRealtime=$now"
       Log.i(TAG, suppMsg)
@@ -1155,6 +1293,7 @@ class GeckoEngineManager private constructor(private val context: Context) {
         val current = activeRecoveries[tabId]
         if (current != null && current.generation == pendingRecovery.generation && current.stage != RecoveryStage.SUCCESS && current.stage != RecoveryStage.FAILED) {
           activeRecoveries.remove(tabId)
+          lastRecoveredGenerations[tabId] = pendingRecovery.generation
           val toMsg = "[FORENSIC][CONTENT_RECOVERY_TIMEOUT] tabId=$tabId session=$sessId view=$viewId url=$targetUrl gen=${pendingRecovery.generation} stage=${current.stage} elapsedRealtime=${android.os.SystemClock.elapsedRealtime()}"
           Log.w(TAG, toMsg)
           com.remmi.browser.util.DebugLogManager.log(toMsg)
@@ -1599,6 +1738,8 @@ class GeckoEngineManager private constructor(private val context: Context) {
     activeRecovery?.timeoutRunnable?.let { mainHandler.removeCallbacks(it) }
     lastDispatchedUrls.remove(tabId)
     lastObservedUrls.remove(tabId)
+    latestProgressUrls.remove(tabId)
+    latestLocationUrls.remove(tabId)
     dispatchedNavigationsHistory.remove(tabId)
     navGenerations.remove(tabId)
     lastRecoveredGenerations.remove(tabId)
@@ -1635,6 +1776,8 @@ class GeckoEngineManager private constructor(private val context: Context) {
     activeRecoveries.clear()
     lastDispatchedUrls.clear()
     lastObservedUrls.clear()
+    latestProgressUrls.clear()
+    latestLocationUrls.clear()
     dispatchedNavigationsHistory.clear()
     navGenerations.clear()
     lastRecoveredGenerations.clear()
@@ -1673,6 +1816,8 @@ class GeckoEngineManager private constructor(private val context: Context) {
       activeRecoveries.clear()
       lastDispatchedUrls.clear()
       lastObservedUrls.clear()
+      latestProgressUrls.clear()
+      latestLocationUrls.clear()
       dispatchedNavigationsHistory.clear()
       navGenerations.clear()
       lastRecoveredGenerations.clear()

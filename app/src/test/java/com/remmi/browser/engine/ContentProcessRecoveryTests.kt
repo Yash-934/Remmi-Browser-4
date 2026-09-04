@@ -1095,4 +1095,377 @@ class ContentProcessRecoveryTests {
     val logs = DebugLogManager.getCurrentSessionEvents().joinToString("\n")
     assertFalse("Invariant violation must NOT be logged during detach", logs.contains("[VIEW_INVARIANT_VIOLATION]"))
   }
+
+  /**
+   * STEP 20 Requirement 10.A:
+   * Same-URL recovery with NO onLocationChange -> NAV_STOP(success=true)
+   * => NAV_SUCCESS + suppression state cleared
+   */
+  @Test
+  fun testStep20_sameUrlRecovery_withNoOnLocationChange_completesSuccessAndClearsSuppressionState() = runBlocking {
+    val tab = tabManager.createTab("about:blank")
+    val tabId = tab.id
+    val settings = GeckoSessionSettings.Builder().usePrivateMode(true).build()
+    val session = GeckoSession(settings)
+    manager.setSessionForTesting(tabId, session)
+
+    val loadedUrls = mutableListOf<String>()
+    manager.uriLoaderForTest = { _, _, url -> loadedUrls.add(url) }
+
+    val geckoView = GeckoView(context).apply { tag = tabId }
+    manager.attachView(
+      tabId = tabId,
+      geckoView = geckoView,
+      profile = PrivacyProfile.SHIELD,
+      isDesktopMode = false,
+      callbacks = dummyCallbacks,
+    )
+
+    val targetUrl = "https://kotlinlang.org/"
+    manager.loadUrl(tabId, targetUrl)
+    loadedUrls.clear()
+
+    // Process kill occurs
+    session.contentDelegate?.onKill(session)
+    assertTrue("Active recovery must be registered", manager.hasActiveRecovery(tabId))
+    assertEquals("Must dispatch reload for targetUrl", 1, loadedUrls.size)
+    assertEquals(targetUrl, loadedUrls[0])
+
+    val initialActive = manager.getActiveRecovery(tabId)
+    assertNotNull(initialActive)
+    assertEquals(GeckoEngineManager.RecoveryStage.DISPATCHED, initialActive?.stage)
+
+    DebugLogManager.clear()
+
+    // In a same-URL reload, GeckoView does NOT emit onLocationChange because the URL didn't change.
+    // The page finish stop callback arrives:
+    session.progressDelegate?.onPageStop(session, true)
+
+    // 1. Recovery must be marked SUCCESS and removed
+    assertFalse("Active recovery must be removed after successful stop", manager.hasActiveRecovery(tabId))
+
+    // 2. Suppression state (lastRecoveredGenerations) must be cleared
+    assertNull("lastRecoveredGenerations must be cleared upon successful recovery", manager.getLastRecoveredGeneration(tabId))
+
+    // 3. Emits CONTENT_RECOVERY_NAV_SUCCESS
+    val logs = DebugLogManager.getCurrentSessionEvents().joinToString("\n")
+    assertTrue("Must emit CONTENT_RECOVERY_NAV_SUCCESS", logs.contains("[CONTENT_RECOVERY_NAV_SUCCESS]"))
+
+    // 4. A subsequent independent content kill in the same generation MUST NOT be suppressed by max_attempts_exceeded
+    loadedUrls.clear()
+    DebugLogManager.clear()
+    session.contentDelegate?.onKill(session)
+
+    assertEquals("Second kill in same generation must dispatch recovery", 1, loadedUrls.size)
+    assertEquals(targetUrl, loadedUrls[0])
+    assertTrue("Second recovery must be active", manager.hasActiveRecovery(tabId))
+    val logs2 = DebugLogManager.getCurrentSessionEvents().joinToString("\n")
+    assertFalse("Second kill must NOT be suppressed by max_attempts_exceeded", logs2.contains("reason=max_attempts_exceeded"))
+  }
+
+  /**
+   * STEP 21 Test A: Exact same-URL recovery => SUCCESS
+   */
+  @Test
+  fun testStep21_A_exactSameUrlRecovery_success() = runBlocking {
+    val tab = tabManager.createTab("about:blank")
+    val tabId = tab.id
+    val settings = GeckoSessionSettings.Builder().usePrivateMode(true).build()
+    val session = GeckoSession(settings)
+    manager.setSessionForTesting(tabId, session)
+
+    val loadedUrls = mutableListOf<String>()
+    manager.uriLoaderForTest = { _, _, url -> loadedUrls.add(url) }
+
+    val geckoView = GeckoView(context).apply { tag = tabId }
+    manager.attachView(
+      tabId = tabId,
+      geckoView = geckoView,
+      profile = PrivacyProfile.SHIELD,
+      isDesktopMode = false,
+      callbacks = dummyCallbacks,
+    )
+
+    val targetUrl = "https://example.com/docs/intro"
+    manager.loadUrl(tabId, targetUrl)
+    session.navigationDelegate?.onLocationChange(session, targetUrl, mutableListOf(), false)
+    session.progressDelegate?.onPageStop(session, true)
+    loadedUrls.clear()
+    DebugLogManager.clear()
+
+    // Content kill triggers recovery
+    session.contentDelegate?.onKill(session)
+    assertTrue("Recovery should be active", manager.hasActiveRecovery(tabId))
+    assertEquals("Must dispatch reload for targetUrl", 1, loadedUrls.size)
+    assertEquals(targetUrl, loadedUrls[0])
+
+    // Exact target location and stop arrives
+    session.navigationDelegate?.onLocationChange(session, targetUrl, mutableListOf(), false)
+    session.progressDelegate?.onPageStop(session, true)
+
+    assertFalse("Recovery must be marked SUCCESS and removed", manager.hasActiveRecovery(tabId))
+    assertNull("Suppression generation must be cleared", manager.getLastRecoveredGeneration(tabId))
+    val logs = DebugLogManager.getCurrentSessionEvents().joinToString("\n")
+    assertTrue("Must emit CONTENT_RECOVERY_NAV_SUCCESS", logs.contains("[CONTENT_RECOVERY_NAV_SUCCESS]"))
+  }
+
+  /**
+   * STEP 21 Test B: No onLocationChange + exact target onPageStop => SUCCESS
+   */
+  @Test
+  fun testStep21_B_noOnLocationChange_exactTargetOnPageStop_success() = runBlocking {
+    val tab = tabManager.createTab("about:blank")
+    val tabId = tab.id
+    val settings = GeckoSessionSettings.Builder().usePrivateMode(true).build()
+    val session = GeckoSession(settings)
+    manager.setSessionForTesting(tabId, session)
+
+    val loadedUrls = mutableListOf<String>()
+    manager.uriLoaderForTest = { _, _, url -> loadedUrls.add(url) }
+
+    val geckoView = GeckoView(context).apply { tag = tabId }
+    manager.attachView(
+      tabId = tabId,
+      geckoView = geckoView,
+      profile = PrivacyProfile.SHIELD,
+      isDesktopMode = false,
+      callbacks = dummyCallbacks,
+    )
+
+    val targetUrl = "https://example.com/dashboard"
+    manager.loadUrl(tabId, targetUrl)
+    session.navigationDelegate?.onLocationChange(session, targetUrl, mutableListOf(), false)
+    session.progressDelegate?.onPageStop(session, true)
+    loadedUrls.clear()
+    DebugLogManager.clear()
+
+    // Content kill triggers recovery
+    session.contentDelegate?.onKill(session)
+    assertTrue("Recovery should be active", manager.hasActiveRecovery(tabId))
+
+    // Same-URL recovery: Gecko does NOT emit onLocationChange, only onPageStop arrives
+    session.progressDelegate?.onPageStop(session, true)
+
+    assertFalse("Recovery must be completed and removed", manager.hasActiveRecovery(tabId))
+    assertNull("Suppression generation must be cleared", manager.getLastRecoveredGeneration(tabId))
+    val logs = DebugLogManager.getCurrentSessionEvents().joinToString("\n")
+    assertTrue("Must emit CONTENT_RECOVERY_NAV_SUCCESS", logs.contains("[CONTENT_RECOVERY_NAV_SUCCESS]"))
+  }
+
+  /**
+   * STEP 21 Test C: Same host but different path => NOT SUCCESS
+   */
+  @Test
+  fun testStep21_C_sameHostDifferentPath_notSuccess() = runBlocking {
+    val tab = tabManager.createTab("about:blank")
+    val tabId = tab.id
+    val settings = GeckoSessionSettings.Builder().usePrivateMode(true).build()
+    val session = GeckoSession(settings)
+    manager.setSessionForTesting(tabId, session)
+
+    val loadedUrls = mutableListOf<String>()
+    manager.uriLoaderForTest = { _, _, url -> loadedUrls.add(url) }
+
+    val geckoView = GeckoView(context).apply { tag = tabId }
+    manager.attachView(
+      tabId = tabId,
+      geckoView = geckoView,
+      profile = PrivacyProfile.SHIELD,
+      isDesktopMode = false,
+      callbacks = dummyCallbacks,
+    )
+
+    val targetUrl = "https://example.com/target/path"
+    manager.loadUrl(tabId, targetUrl)
+    session.navigationDelegate?.onLocationChange(session, targetUrl, mutableListOf(), false)
+    session.progressDelegate?.onPageStop(session, true)
+    loadedUrls.clear()
+    DebugLogManager.clear()
+
+    // Content kill triggers recovery
+    session.contentDelegate?.onKill(session)
+    assertTrue("Recovery should be active", manager.hasActiveRecovery(tabId))
+
+    // A navigation with different path on same host arrives (NOT an authorized redirect)
+    val differentPathUrl = "https://example.com/unrelated/path"
+    session.navigationDelegate?.onLocationChange(session, differentPathUrl, mutableListOf(), false)
+    session.progressDelegate?.onPageStop(session, true)
+
+    // Recovery must NOT be marked SUCCESS because the path does not match
+    assertTrue("Recovery must remain active and NOT be marked success for different path", manager.hasActiveRecovery(tabId))
+    val logs = DebugLogManager.getCurrentSessionEvents().joinToString("\n")
+    assertFalse("Must NOT emit CONTENT_RECOVERY_NAV_SUCCESS for different path", logs.contains("[CONTENT_RECOVERY_NAV_SUCCESS]"))
+  }
+
+  /**
+   * STEP 21 Test D: Same host but different query => NOT SUCCESS
+   */
+  @Test
+  fun testStep21_D_sameHostDifferentQuery_notSuccess() = runBlocking {
+    val tab = tabManager.createTab("about:blank")
+    val tabId = tab.id
+    val settings = GeckoSessionSettings.Builder().usePrivateMode(true).build()
+    val session = GeckoSession(settings)
+    manager.setSessionForTesting(tabId, session)
+
+    val loadedUrls = mutableListOf<String>()
+    manager.uriLoaderForTest = { _, _, url -> loadedUrls.add(url) }
+
+    val geckoView = GeckoView(context).apply { tag = tabId }
+    manager.attachView(
+      tabId = tabId,
+      geckoView = geckoView,
+      profile = PrivacyProfile.SHIELD,
+      isDesktopMode = false,
+      callbacks = dummyCallbacks,
+    )
+
+    val targetUrl = "https://example.com/search?q=kotlin"
+    manager.loadUrl(tabId, targetUrl)
+    session.navigationDelegate?.onLocationChange(session, targetUrl, mutableListOf(), false)
+    session.progressDelegate?.onPageStop(session, true)
+    loadedUrls.clear()
+    DebugLogManager.clear()
+
+    // Content kill triggers recovery
+    session.contentDelegate?.onKill(session)
+    assertTrue("Recovery should be active", manager.hasActiveRecovery(tabId))
+
+    // An event on the same host and path but different query parameter arrives
+    val differentQueryUrl = "https://example.com/search?q=java"
+    session.navigationDelegate?.onLocationChange(session, differentQueryUrl, mutableListOf(), false)
+    session.progressDelegate?.onPageStop(session, true)
+
+    // Recovery must NOT be marked SUCCESS because the query differs
+    assertTrue("Recovery must remain active and NOT be marked success for different query", manager.hasActiveRecovery(tabId))
+    val logs = DebugLogManager.getCurrentSessionEvents().joinToString("\n")
+    assertFalse("Must NOT emit CONTENT_RECOVERY_NAV_SUCCESS for different query", logs.contains("[CONTENT_RECOVERY_NAV_SUCCESS]"))
+  }
+
+  /**
+   * STEP 21 Test E: about:blank => NOT SUCCESS
+   */
+  @Test
+  fun testStep21_E_aboutBlank_notSuccess() = runBlocking {
+    val tab = tabManager.createTab("about:blank")
+    val tabId = tab.id
+    val settings = GeckoSessionSettings.Builder().usePrivateMode(true).build()
+    val session = GeckoSession(settings)
+    manager.setSessionForTesting(tabId, session)
+
+    val loadedUrls = mutableListOf<String>()
+    manager.uriLoaderForTest = { _, _, url -> loadedUrls.add(url) }
+
+    val geckoView = GeckoView(context).apply { tag = tabId }
+    manager.attachView(
+      tabId = tabId,
+      geckoView = geckoView,
+      profile = PrivacyProfile.SHIELD,
+      isDesktopMode = false,
+      callbacks = dummyCallbacks,
+    )
+
+    val targetUrl = "https://example.com/home"
+    manager.loadUrl(tabId, targetUrl)
+    session.navigationDelegate?.onLocationChange(session, targetUrl, mutableListOf(), false)
+    session.progressDelegate?.onPageStop(session, true)
+    loadedUrls.clear()
+    DebugLogManager.clear()
+
+    // Content kill triggers recovery
+    session.contentDelegate?.onKill(session)
+    assertTrue("Recovery should be active", manager.hasActiveRecovery(tabId))
+
+    // about:blank stop arrives (e.g. initial clean or crash state)
+    session.navigationDelegate?.onLocationChange(session, "about:blank", mutableListOf(), false)
+    session.progressDelegate?.onPageStop(session, true)
+
+    // Recovery must NOT be satisfied by about:blank
+    assertTrue("Recovery must remain active and NOT be marked success for about:blank", manager.hasActiveRecovery(tabId))
+    val logs = DebugLogManager.getCurrentSessionEvents().joinToString("\n")
+    assertFalse("Must NOT emit CONTENT_RECOVERY_NAV_SUCCESS for about:blank", logs.contains("[CONTENT_RECOVERY_NAV_SUCCESS]"))
+  }
+
+  /**
+   * STEP 21 Test F: Legitimate redirect chain => correct behavior (SUCCESS)
+   */
+  @Test
+  fun testStep21_F_legitimateRedirectChain_success() = runBlocking {
+    val tab = tabManager.createTab("about:blank")
+    val tabId = tab.id
+    val settings = GeckoSessionSettings.Builder().usePrivateMode(true).build()
+    val session = GeckoSession(settings)
+    manager.setSessionForTesting(tabId, session)
+
+    val loadedUrls = mutableListOf<String>()
+    manager.uriLoaderForTest = { _, _, url -> loadedUrls.add(url) }
+
+    val geckoView = GeckoView(context).apply { tag = tabId }
+    manager.attachView(
+      tabId = tabId,
+      geckoView = geckoView,
+      profile = PrivacyProfile.SHIELD,
+      isDesktopMode = false,
+      callbacks = dummyCallbacks,
+    )
+
+    val initialUrl = "http://example.com/login"
+    manager.loadUrl(tabId, initialUrl)
+    session.navigationDelegate?.onLocationChange(session, initialUrl, mutableListOf(), false)
+    session.progressDelegate?.onPageStop(session, true)
+    loadedUrls.clear()
+    DebugLogManager.clear()
+
+    // Content kill triggers recovery
+    session.contentDelegate?.onKill(session)
+    assertTrue("Recovery should be active", manager.hasActiveRecovery(tabId))
+
+    // Legitimate redirect is recorded during recovery load (e.g. 302 to /dashboard)
+    val redirectedUrl = "https://example.com/dashboard"
+    manager.recordRecoveryRedirect(tabId, redirectedUrl)
+    session.navigationDelegate?.onLocationChange(session, redirectedUrl, mutableListOf(), false)
+    session.progressDelegate?.onPageStop(session, true)
+
+    // Recovery should recognize the legitimate recorded redirect and succeed
+    assertFalse("Recovery must be marked SUCCESS and removed for legitimate redirect", manager.hasActiveRecovery(tabId))
+    assertNull("Suppression generation must be cleared", manager.getLastRecoveredGeneration(tabId))
+    val logs = DebugLogManager.getCurrentSessionEvents().joinToString("\n")
+    assertTrue("Must emit CONTENT_RECOVERY_NAV_SUCCESS for legitimate redirect", logs.contains("[CONTENT_RECOVERY_NAV_SUCCESS]"))
+  }
+
+  /**
+   * STEP 21 URL Normalization Unit Tests
+   */
+  @Test
+  fun testStep21_urlNormalizationEquivalence() {
+    // Exact match
+    assertTrue(manager.areUrlsEquivalent("https://example.com/page", "https://example.com/page"))
+
+    // Trailing slash difference
+    assertTrue(manager.areUrlsEquivalent("https://example.com/page/", "https://example.com/page"))
+    assertTrue(manager.areUrlsEquivalent("https://example.com/", "https://example.com"))
+
+    // Default port vs explicit port
+    assertTrue(manager.areUrlsEquivalent("http://example.com:80/page", "http://example.com/page"))
+    assertTrue(manager.areUrlsEquivalent("https://example.com:443/page", "https://example.com/page"))
+
+    // HTTP <-> HTTPS canonical upgrade
+    assertTrue(manager.areUrlsEquivalent("http://example.com/page", "https://example.com/page"))
+
+    // www prefix canonicalization
+    assertTrue(manager.areUrlsEquivalent("https://www.example.com/page", "https://example.com/page"))
+
+    // Query parameters in different order
+    assertTrue(manager.areUrlsEquivalent("https://example.com/search?a=1&b=2", "https://example.com/search?b=2&a=1"))
+
+    // Different path => false
+    assertFalse(manager.areUrlsEquivalent("https://example.com/page1", "https://example.com/page2"))
+
+    // Different query value => false
+    assertFalse(manager.areUrlsEquivalent("https://example.com/search?q=1", "https://example.com/search?q=2"))
+
+    // Internal URLs => false
+    assertFalse(manager.areUrlsEquivalent("about:blank", "about:blank"))
+    assertFalse(manager.areUrlsEquivalent("https://example.com", "about:blank"))
+  }
 }
