@@ -162,10 +162,16 @@ fun BrowserScreen(
   val scope = rememberCoroutineScope()
   val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
 
+  val tabManager = remember { TabManager.getInstance() }
+  val tabs by tabManager.tabs.collectAsState()
+  val tabGroups by tabManager.tabGroups.collectAsState()
+  val activeTabIndex by tabManager.activeTabIndex.collectAsState()
+
   var composeCount by remember { mutableIntStateOf(0) }
   SideEffect {
     composeCount++
-    com.remmi.browser.util.DebugLogManager.log("[FORENSIC] BROWSER_SCREEN_COMPOSE count=$composeCount (time=${android.os.SystemClock.elapsedRealtime()})")
+    val curTabId = tabManager.activeTab?.id ?: "none"
+    com.remmi.browser.util.DebugLogManager.log("[FORENSIC] BROWSER_SCREEN_COMPOSE count=$composeCount activeTabId=$curTabId (time=${android.os.SystemClock.elapsedRealtime()})")
   }
 
   LaunchedEffect(Unit) {
@@ -174,13 +180,18 @@ fun BrowserScreen(
   }
 
   DisposableEffect(Unit) {
+    val curTabId = tabManager.activeTab?.id ?: "none"
+    val enterMsg = "[FORENSIC][COMPOSE_ENTER] screen=BrowserScreen tabId=$curTabId tabCount=${tabManager.tabs.value.size} activeIndex=${tabManager.activeTabIndex.value} elapsedRealtime=${android.os.SystemClock.elapsedRealtime()}"
+    android.util.Log.i("BrowserScreen", enterMsg)
+    com.remmi.browser.util.DebugLogManager.log(enterMsg)
     onDispose {
-      com.remmi.browser.util.DebugLogManager.log("[FORENSIC] BROWSER_SCREEN_COMPOSE DisposableEffect left")
+      val exitCaller = try { Thread.currentThread().stackTrace.take(6).joinToString(" -> ") { "${it.className.substringAfterLast('.')}.${it.methodName}:${it.lineNumber}" } } catch (_: Exception) { "unknown" }
+      val exitMsg = "[FORENSIC][COMPOSE_EXIT] screen=BrowserScreen tabId=$curTabId tabCount=${tabManager.tabs.value.size} activeIndex=${tabManager.activeTabIndex.value} reason=BrowserScreen_left_composition caller=$exitCaller elapsedRealtime=${android.os.SystemClock.elapsedRealtime()}"
+      android.util.Log.i("BrowserScreen", exitMsg)
+      com.remmi.browser.util.DebugLogManager.log(exitMsg)
     }
   }
 
-  val tabManager = remember { TabManager.getInstance() }
-  
   val torManager = remember { TorManager.getInstance(context) }
   val geckoEngine = remember { com.remmi.browser.engine.GeckoEngineManager.getInstance(context) }
   val dbState by RemmiDatabase.databaseState.collectAsState()
@@ -190,10 +201,6 @@ fun BrowserScreen(
   val passwordRepo = remember { com.remmi.browser.security.PasswordManagerRepository.getInstance(context) }
   val autofillHelper = remember { com.remmi.browser.security.autofill.PasswordAutofillCoordinator(context, scope, passwordRepo) }
   val sitePolicyManager = remember { com.remmi.browser.security.SiteSecurityPolicyManager.getInstance(context) }
-
-  val tabs by tabManager.tabs.collectAsState()
-  val tabGroups by tabManager.tabGroups.collectAsState()
-  val activeTabIndex by tabManager.activeTabIndex.collectAsState()
   val torState by torManager.bootstrapState.collectAsState()
   val circuit by torManager.currentCircuit.collectAsState()
   val settings by settingsRepo.settings.collectAsState()
@@ -311,7 +318,15 @@ fun BrowserScreen(
         val nonPrivateSavedTabs = savedTabs.filter { it.profile != PrivacyProfile.GHOST.name && it.profile != PrivacyProfile.INCOGNITO.name }
         if (nonPrivateSavedTabs.isNotEmpty()) {
           withContext(Dispatchers.Main) {
-            tabManager.restoreSavedTabs(nonPrivateSavedTabs)
+            val currentTabs = tabManager.tabs.value
+            val isStillUntouched = currentTabs.size == 1 && (currentTabs[0].url == "about:blank" || currentTabs[0].url.isBlank())
+            if (isStillUntouched) {
+              tabManager.restoreSavedTabs(nonPrivateSavedTabs)
+            } else {
+              val skipMsg = "[FORENSIC][RESTORE_GUARD] User navigation in-progress, skipping disk session restore"
+              android.util.Log.i("BrowserScreen", skipMsg)
+              com.remmi.browser.util.DebugLogManager.log(skipMsg)
+            }
             isSessionRestored = true
           }
         } else {
@@ -801,61 +816,63 @@ fun BrowserScreen(
             modifier = Modifier.fillMaxSize()
           )
         } else {
-          BrowserView(
-            tab = activeTab,
-            onUrlChange = { newUrl ->
-              tabManager.updateTab(activeTab.id) { 
-                if (it.url != newUrl) {
-                  it.copy(url = newUrl, isReaderMode = false, readerArticle = null)
-                } else {
-                  it.copy(url = newUrl)
+          androidx.compose.runtime.key(activeTab.id) {
+            BrowserView(
+              tab = activeTab,
+              onUrlChange = { newUrl ->
+                tabManager.updateTab(activeTab.id) { 
+                  if (it.url != newUrl) {
+                    it.copy(url = newUrl, isReaderMode = false, readerArticle = null)
+                  } else {
+                    it.copy(url = newUrl)
+                  }
                 }
-              }
-              if (activeTab.profile != PrivacyProfile.GHOST && activeTab.profile != PrivacyProfile.INCOGNITO) {
-                scope.launch(Dispatchers.IO) {
-                  val db = RemmiDatabase.getDatabaseAsync(context)
-                  db.historyDao().insertIfNotDuplicate(
-                    HistoryItem(
-                      url = newUrl,
-                      title = activeTab.title,
-                      profile = activeTab.profile.name
+                if (activeTab.profile != PrivacyProfile.GHOST && activeTab.profile != PrivacyProfile.INCOGNITO) {
+                  scope.launch(Dispatchers.IO) {
+                    val db = RemmiDatabase.getDatabaseAsync(context)
+                    db.historyDao().insertIfNotDuplicate(
+                      HistoryItem(
+                        url = newUrl,
+                        title = activeTab.title,
+                        profile = activeTab.profile.name
+                      )
                     )
-                  )
+                  }
                 }
-              }
-            },
-            onTitleChange = { newTitle ->
-              tabManager.updateTab(activeTab.id) { it.copy(title = newTitle) }
-            },
-            onProgressChange = { /* handled locally in BrowserView to avoid recomposition churn */ },
-            onLoadingChange = { loading ->
-              if (activeTab.isLoading != loading) {
-                tabManager.updateTab(activeTab.id) { it.copy(isLoading = loading) }
-              }
-            },
-            onSecurityChange = { secure ->
-              if (activeTab.isSecure != secure) {
-                tabManager.updateTab(activeTab.id) { it.copy(isSecure = secure) }
-              }
-            },
-            onNavStateChange = { canBack, canForward ->
-              if (activeTab.canGoBack != canBack || activeTab.canGoForward != canForward) {
-                tabManager.updateTab(activeTab.id) {
-                  it.copy(canGoBack = canBack, canGoForward = canForward)
+              },
+              onTitleChange = { newTitle ->
+                tabManager.updateTab(activeTab.id) { it.copy(title = newTitle) }
+              },
+              onProgressChange = { /* handled locally in BrowserView to avoid recomposition churn */ },
+              onLoadingChange = { loading ->
+                if (activeTab.isLoading != loading) {
+                  tabManager.updateTab(activeTab.id) { it.copy(isLoading = loading) }
                 }
-              }
-            },
-            onTrackerBlocked = { url, domain ->
-              tabManager.incrementTrackerCount(activeTab.id, domain)
-            },
-            onReaderArticleExtracted = { article ->
-              tabManager.setReaderArticle(activeTab.id, article)
-            },
-            onContextMenuRequested = { data ->
-              activeContextMenuData = data
-            },
-            modifier = Modifier.fillMaxSize()
-          )
+              },
+              onSecurityChange = { secure ->
+                if (activeTab.isSecure != secure) {
+                  tabManager.updateTab(activeTab.id) { it.copy(isSecure = secure) }
+                }
+              },
+              onNavStateChange = { canBack, canForward ->
+                if (activeTab.canGoBack != canBack || activeTab.canGoForward != canForward) {
+                  tabManager.updateTab(activeTab.id) {
+                    it.copy(canGoBack = canBack, canGoForward = canForward)
+                  }
+                }
+              },
+              onTrackerBlocked = { url, domain ->
+                tabManager.incrementTrackerCount(activeTab.id, domain)
+              },
+              onReaderArticleExtracted = { article ->
+                tabManager.setReaderArticle(activeTab.id, article)
+              },
+              onContextMenuRequested = { data ->
+                activeContextMenuData = data
+              },
+              modifier = Modifier.fillMaxSize()
+            )
+          }
         }
 
         // Reader Mode Fullscreen View

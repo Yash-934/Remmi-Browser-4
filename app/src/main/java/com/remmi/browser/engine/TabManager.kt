@@ -192,8 +192,13 @@ class TabManager {
 
   fun switchTab(index: Int) {
     if (index in _tabs.value.indices) {
+      val beforeTabId = activeTab?.id ?: "none"
       _activeTabIndex.value = index
       val tab = _tabs.value[index]
+      val afterTabId = tab.id
+      val msg = "[FORENSIC][TAB_SWITCH] selectedTabIdBefore=$beforeTabId selectedTabIdAfter=$afterTabId activeIndexBefore=$_activeTabIndex activeIndexAfter=$index"
+      Log.i(TAG, msg)
+      DebugLogManager.log(msg)
       updateTab(tab.id) {
         it.copy(lastAccessedAt = System.currentTimeMillis(), isInactive = false)
       }
@@ -216,6 +221,8 @@ class TabManager {
     val tabToCloseIndex = currentTabs.indexOfFirst { it.id == tabId }
     if (tabToCloseIndex < 0) return
 
+    val beforeTabId = activeTab?.id ?: "none"
+    val sizeBefore = currentTabs.size
     val newTabs = currentTabs.filter { it.id != tabId }
     if (newTabs.isEmpty()) {
       _tabs.value = listOf(
@@ -236,6 +243,11 @@ class TabManager {
         _activeTabIndex.value -= 1
       }
     }
+    val afterTabId = activeTab?.id ?: "none"
+    val sizeAfter = _tabs.value.size
+    val closeMsg = "[FORENSIC][TAB_CLOSE] closedTabId=$tabId selectedTabIdBefore=$beforeTabId selectedTabIdAfter=$afterTabId tabCountBefore=$sizeBefore tabCountAfter=$sizeAfter"
+    Log.i(TAG, closeMsg)
+    DebugLogManager.log(closeMsg)
   }
 
   fun duplicateTab(tabId: String) {
@@ -446,6 +458,13 @@ class TabManager {
 
   fun restoreSavedTabs(savedTabs: List<SessionTabEntity>) {
     if (savedTabs.isEmpty()) return
+    val currentTabs = _tabs.value
+    if (currentTabs.size > 1 || (currentTabs.size == 1 && currentTabs[0].url != "about:blank" && currentTabs[0].url.isNotBlank())) {
+      val skipMsg = "[FORENSIC][RESTORE_SKIPPED] Active session already in progress with ${currentTabs.size} tabs"
+      Log.i(TAG, skipMsg)
+      DebugLogManager.log(skipMsg)
+      return
+    }
     val restored = savedTabs.map { entity ->
       val p = try {
         PrivacyProfile.valueOf(entity.profile)
@@ -461,8 +480,13 @@ class TabManager {
         lastAccessedAt = entity.timestamp,
       )
     }
+    val beforeTabId = activeTab?.id ?: "none"
     _tabs.value = restored
     _activeTabIndex.value = 0
+    val afterTabId = activeTab?.id ?: "none"
+    val resMsg = "[FORENSIC][RESTORE_TABS] selectedTabIdBefore=$beforeTabId selectedTabIdAfter=$afterTabId tabCountBefore=${currentTabs.size} tabCountAfter=${restored.size}"
+    Log.i(TAG, resMsg)
+    DebugLogManager.log(resMsg)
   }
 
   fun purgePrivateTabs() {

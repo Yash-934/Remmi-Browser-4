@@ -130,6 +130,9 @@ class MainActivity : FragmentActivity() {
           transitionSpec = { fadeIn() togetherWith fadeOut() },
           label = "screen_navigation",
         ) { screen ->
+          val screenMsg = "[FORENSIC][SCREEN_ROUTE] targetScreen=$screen elapsedRealtime=${android.os.SystemClock.elapsedRealtime()}"
+          android.util.Log.i("MainActivity", screenMsg)
+          com.remmi.browser.util.DebugLogManager.log(screenMsg)
           when (screen) {
             ScreenRoute.EMERGENCY_RECOVERY -> {
               com.remmi.browser.ui.screens.EmergencyWipeRecoveryScreen(

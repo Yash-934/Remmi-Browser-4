@@ -124,6 +124,7 @@ class GeckoEngineManager private constructor(private val context: Context) {
   var currentProfile: PrivacyProfile = PrivacyProfile.SHIELD
   private val activeSessions = mutableMapOf<String, GeckoSession>()
   
+  fun getSession(tabId: String): GeckoSession? = activeSessions[tabId]
   fun getSessionForTest(tabId: String): GeckoSession? = activeSessions[tabId]
   fun getAttachedViewForTest(tabId: String): org.mozilla.geckoview.GeckoView? = attachedViews[tabId]
   private val sessionCallbacks = mutableMapOf<String, GeckoTabCallbacks>()
@@ -184,6 +185,7 @@ class GeckoEngineManager private constructor(private val context: Context) {
   private val pendingNavigations = mutableMapOf<String, PendingNavigation>()
   private val pendingContentRecoveries = mutableMapOf<String, PendingContentRecovery>()
   private val activeRecoveries = mutableMapOf<String, ActiveRecovery>()
+  private val inFlightNavigations = mutableMapOf<String, Long>()
   private val lastDispatchedUrls = mutableMapOf<String, String>()
   private val lastObservedUrls = mutableMapOf<String, String>()
   private val latestProgressUrls = mutableMapOf<String, String>()
@@ -806,6 +808,7 @@ class GeckoEngineManager private constructor(private val context: Context) {
               val prevUrl = prevObserved ?: prevDispatched
               lastDispatchedUrls[tabId] = url
               val newNavId = allocateNavId(tabId)
+              inFlightNavigations[tabId] = newNavId
               val newGen = (navGenerations[tabId] ?: 0L) + 1L
               navGenerations[tabId] = newGen
               lastRecoveredGenerations.remove(tabId)
@@ -873,6 +876,7 @@ class GeckoEngineManager private constructor(private val context: Context) {
           val isSameAsDispatched = areUrlsEquivalent(prevDispatched, url)
           val isSameAsObserved = areUrlsEquivalent(prevObserved, url)
           val hostChanged = isDifferentHost(prevObserved ?: prevDispatched, url)
+          val isInFlight = inFlightNavigations.containsKey(tabId)
 
           val classification: String
           val genAfter: Long
@@ -881,6 +885,7 @@ class GeckoEngineManager private constructor(private val context: Context) {
             classification = "APP_REQUEST_MATCH"
             genAfter = genBefore
             lastDispatchedUrls[tabId] = url
+            inFlightNavigations.remove(tabId)
           } else if (isSameAsObserved) {
             classification = "DUPLICATE_OBSERVATION"
             genAfter = genBefore
@@ -889,14 +894,6 @@ class GeckoEngineManager private constructor(private val context: Context) {
             classification = "REDIRECT"
             genAfter = genBefore
             lastDispatchedUrls[tabId] = url
-          } else if (!hostChanged && !hasUserGesture) {
-            // Same-host SPA / script history change (e.g. DuckDuckGo replaceState / pushState)
-            classification = "SAME_DOCUMENT_SPA"
-            genAfter = genBefore
-            lastDispatchedUrls[tabId] = url
-            val spaMsg = "[FORENSIC][NAV_SAME_DOC_SPA] tabId=$tabId session=$sessId view=$viewId navId=$activeNavId url=$url prevUrl=${prevObserved ?: prevDispatched} gen=$genBefore hasUserGesture=false elapsedRealtime=$now"
-            Log.i(TAG, spaMsg)
-            com.remmi.browser.util.DebugLogManager.log(spaMsg)
           } else if (hostChanged || hasUserGesture) {
             // Genuine in-page navigation fallback (different host or user gesture where onLoadRequest didn't already advance it)
             classification = "GENUINE_NAVIGATION"
@@ -912,6 +909,19 @@ class GeckoEngineManager private constructor(private val context: Context) {
             val navReqMsg = "[FORENSIC] [NAV_REQUESTED] tabId=$tabId session=$sessId view=$viewId navId=$newNavId url=$url gen=$genAfter trigger=USER_GESTURE elapsedRealtime=$now"
             Log.i(TAG, navReqMsg)
             com.remmi.browser.util.DebugLogManager.log(navReqMsg)
+          } else if (isInFlight) {
+            // Continuation / redirect / location resolution for existing in-flight navigation (prevent duplicate navId)
+            classification = "IN_FLIGHT_LOCATION_MATCH"
+            genAfter = genBefore
+            lastDispatchedUrls[tabId] = url
+          } else if (!hostChanged && !hasUserGesture) {
+            // Same-host SPA / script history change (e.g. DuckDuckGo replaceState / pushState)
+            classification = "SAME_DOCUMENT_SPA"
+            genAfter = genBefore
+            lastDispatchedUrls[tabId] = url
+            val spaMsg = "[FORENSIC][NAV_SAME_DOC_SPA] tabId=$tabId session=$sessId view=$viewId navId=$activeNavId url=$url prevUrl=${prevObserved ?: prevDispatched} gen=$genBefore hasUserGesture=false elapsedRealtime=$now"
+            Log.i(TAG, spaMsg)
+            com.remmi.browser.util.DebugLogManager.log(spaMsg)
           } else {
             classification = "UNKNOWN"
             genAfter = genBefore
@@ -1010,6 +1020,7 @@ class GeckoEngineManager private constructor(private val context: Context) {
         Log.i(TAG, stopMsg)
         com.remmi.browser.util.DebugLogManager.log(stopMsg)
 
+        inFlightNavigations.remove(tabId)
         getMemoryForensicSnapshot("NAV_STOP")
 
         if (success) {
@@ -1784,6 +1795,7 @@ class GeckoEngineManager private constructor(private val context: Context) {
     android.util.Log.i(TAG, "STATE_LOG: FIRST_PAGE_START (time=${android.os.SystemClock.elapsedRealtime()})")
     
     val navId = allocateNavId(tabId)
+    inFlightNavigations[tabId] = navId
     val gen = (navGenerations[tabId] ?: 0L) + 1L
     navGenerations[tabId] = gen
     val now = android.os.SystemClock.elapsedRealtime()

@@ -149,6 +149,19 @@ fun BrowserView(
   }
 
   // Explicit lifecycle observer to re-activate tab session safely on app resume/pause
+  DisposableEffect(tab.id) {
+    val sessId = geckoEngine.getSession(tab.id)?.let { "0x" + Integer.toHexString(System.identityHashCode(it)) } ?: "none"
+    val mountMsg = "[FORENSIC][BROWSER_VIEW_MOUNT] tabId=${tab.id} session=$sessId url=${tab.url} elapsedRealtime=${android.os.SystemClock.elapsedRealtime()}"
+    android.util.Log.i("BrowserView", mountMsg)
+    com.remmi.browser.util.DebugLogManager.log(mountMsg)
+    onDispose {
+      val unmountCaller = try { Thread.currentThread().stackTrace.take(6).joinToString(" -> ") { "${it.className.substringAfterLast('.')}.${it.methodName}:${it.lineNumber}" } } catch (_: Exception) { "unknown" }
+      val unmountMsg = "[FORENSIC][BROWSER_VIEW_UNMOUNT] tabId=${tab.id} session=$sessId url=${tab.url} reason=BrowserView_disposed caller=$unmountCaller elapsedRealtime=${android.os.SystemClock.elapsedRealtime()}"
+      android.util.Log.i("BrowserView", unmountMsg)
+      com.remmi.browser.util.DebugLogManager.log(unmountMsg)
+    }
+  }
+
   DisposableEffect(lifecycleOwner, tab.id) {
     val observer = LifecycleEventObserver { _, event ->
       when (event) {
