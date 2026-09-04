@@ -682,6 +682,9 @@ class GeckoEngineManager private constructor(private val context: Context) {
         Log.i(TAG, navLocMsg)
         com.remmi.browser.util.DebugLogManager.log(navLocMsg)
 
+        val prevObserved = lastObservedUrls[tabId]
+        val prevDispatched = lastDispatchedUrls[tabId]
+
         if (url != null) {
           latestLocationUrls[tabId] = url
         }
@@ -705,8 +708,13 @@ class GeckoEngineManager private constructor(private val context: Context) {
           }
         } else if (activeRecovery == null && url != null && !isInternalOrIgnoredUrl(url)) {
           // Normal user / in-page link navigation (e.g. clicking search result): advance generation and clear stale recovery suppression
-          val prevUrl = lastDispatchedUrls[tabId]
-          if (prevUrl != url) {
+          // Use normalized areUrlsEquivalent against both prevDispatched and prevObserved to reject redundant / normalized same-URL callbacks
+          val isEquivalentToDispatched = areUrlsEquivalent(prevDispatched, url)
+          val isEquivalentToObserved = areUrlsEquivalent(prevObserved, url)
+          val isSameUrl = isEquivalentToDispatched || isEquivalentToObserved
+
+          if (!isSameUrl) {
+            val prevUrl = prevObserved ?: prevDispatched
             lastDispatchedUrls[tabId] = url
             val newGen = (navGenerations[tabId] ?: 0L) + 1L
             navGenerations[tabId] = newGen
@@ -714,6 +722,9 @@ class GeckoEngineManager private constructor(private val context: Context) {
             val inPageMsg = "[FORENSIC][IN_PAGE_NAV] tabId=$tabId session=$sessId url=$url prevUrl=$prevUrl newGen=$newGen elapsedRealtime=$now"
             Log.i(TAG, inPageMsg)
             com.remmi.browser.util.DebugLogManager.log(inPageMsg)
+          } else {
+            // Same URL callback or initial load callback: ensure canonical URL is recorded without incrementing generation
+            lastDispatchedUrls[tabId] = url
           }
         }
 

@@ -1468,4 +1468,164 @@ class ContentProcessRecoveryTests {
     assertFalse(manager.areUrlsEquivalent("about:blank", "about:blank"))
     assertFalse(manager.areUrlsEquivalent("https://example.com", "about:blank"))
   }
+
+  /**
+   * STEP 24 Generation-Tracking Regression Tests
+   */
+  @Test
+  fun testStep24_sameUrlLocationChange_doesNotIncrementGeneration() = runBlocking {
+    val tab = tabManager.createTab("about:blank")
+    val tabId = tab.id
+    val settings = GeckoSessionSettings.Builder().usePrivateMode(true).build()
+    val session = GeckoSession(settings)
+    manager.setSessionForTesting(tabId, session)
+
+    val geckoView = GeckoView(context).apply { tag = tabId }
+    manager.attachView(
+      tabId = tabId,
+      geckoView = geckoView,
+      profile = PrivacyProfile.SHIELD,
+      isDesktopMode = false,
+      callbacks = dummyCallbacks,
+    )
+
+    val targetUrl = "https://duckduckgo.com/?q=android"
+    manager.loadUrl(tabId, targetUrl)
+    val genAfterLoad = manager.getNavGeneration(tabId)
+    assertEquals("Initial loadUrl should establish generation 1", 1L, genAfterLoad)
+
+    // First location change (initial callback)
+    session.navigationDelegate?.onLocationChange(session, targetUrl, mutableListOf<GeckoSession.PermissionDelegate.ContentPermission>(), false)
+    assertEquals("First location callback for same URL must NOT increment generation", 1L, manager.getNavGeneration(tabId))
+
+    // Subsequent redundant location change with exact same URL
+    session.navigationDelegate?.onLocationChange(session, targetUrl, mutableListOf<GeckoSession.PermissionDelegate.ContentPermission>(), false)
+    assertEquals("Redundant location callback for exact same URL must NOT increment generation", 1L, manager.getNavGeneration(tabId))
+  }
+
+  @Test
+  fun testStep24_normalizedSameUrlLocationChange_doesNotIncrementGeneration() = runBlocking {
+    val tab = tabManager.createTab("about:blank")
+    val tabId = tab.id
+    val settings = GeckoSessionSettings.Builder().usePrivateMode(true).build()
+    val session = GeckoSession(settings)
+    manager.setSessionForTesting(tabId, session)
+
+    val geckoView = GeckoView(context).apply { tag = tabId }
+    manager.attachView(
+      tabId = tabId,
+      geckoView = geckoView,
+      profile = PrivacyProfile.SHIELD,
+      isDesktopMode = false,
+      callbacks = dummyCallbacks,
+    )
+
+    val targetUrl = "https://duckduckgo.com/search?q=android"
+    manager.loadUrl(tabId, targetUrl)
+    val genAfterLoad = manager.getNavGeneration(tabId)
+    assertEquals(1L, genAfterLoad)
+
+    // Gecko emits trailing slash version on path or equivalent port version
+    val normalizedUrl = "https://duckduckgo.com/search/?q=android"
+    session.navigationDelegate?.onLocationChange(session, normalizedUrl, mutableListOf<GeckoSession.PermissionDelegate.ContentPermission>(), false)
+    assertEquals("Normalized location callback with trailing slash must NOT increment generation", 1L, manager.getNavGeneration(tabId))
+
+    // Another callback with query order or canonical scheme
+    val reorderedQueryUrl = "https://duckduckgo.com/search?q=android"
+    session.navigationDelegate?.onLocationChange(session, reorderedQueryUrl, mutableListOf<GeckoSession.PermissionDelegate.ContentPermission>(), false)
+    assertEquals("Equivalent URL callback must NOT increment generation", 1L, manager.getNavGeneration(tabId))
+  }
+
+  @Test
+  fun testStep24_genuineLinkClick_incrementsGenerationExactlyOnce() = runBlocking {
+    val tab = tabManager.createTab("about:blank")
+    val tabId = tab.id
+    val settings = GeckoSessionSettings.Builder().usePrivateMode(true).build()
+    val session = GeckoSession(settings)
+    manager.setSessionForTesting(tabId, session)
+
+    val geckoView = GeckoView(context).apply { tag = tabId }
+    manager.attachView(
+      tabId = tabId,
+      geckoView = geckoView,
+      profile = PrivacyProfile.SHIELD,
+      isDesktopMode = false,
+      callbacks = dummyCallbacks,
+    )
+
+    val ddgUrl = "https://duckduckgo.com/?q=kotlin"
+    manager.loadUrl(tabId, ddgUrl)
+    session.navigationDelegate?.onLocationChange(session, ddgUrl, mutableListOf<GeckoSession.PermissionDelegate.ContentPermission>(), false)
+    val initialGen = manager.getNavGeneration(tabId)
+    assertEquals(1L, initialGen)
+
+    // User clicks search result: genuine transition to external site
+    val externalUrl = "https://kotlinlang.org/"
+    session.navigationDelegate?.onLocationChange(session, externalUrl, mutableListOf<GeckoSession.PermissionDelegate.ContentPermission>(), false)
+    val genAfterClick = manager.getNavGeneration(tabId)
+    assertEquals("Genuine link click must increment generation by exactly 1", initialGen + 1L, genAfterClick)
+
+    // Subsequent callback on external site must NOT increment again
+    session.navigationDelegate?.onLocationChange(session, externalUrl, mutableListOf<GeckoSession.PermissionDelegate.ContentPermission>(), false)
+    assertEquals("Subsequent callback on destination site must NOT increment again", genAfterClick, manager.getNavGeneration(tabId))
+  }
+
+  @Test
+  fun testStep24_initialLoadLocationCallback_doesNotDoubleIncrement() = runBlocking {
+    val tab = tabManager.createTab("about:blank")
+    val tabId = tab.id
+    val settings = GeckoSessionSettings.Builder().usePrivateMode(true).build()
+    val session = GeckoSession(settings)
+    manager.setSessionForTesting(tabId, session)
+
+    val geckoView = GeckoView(context).apply { tag = tabId }
+    manager.attachView(
+      tabId = tabId,
+      geckoView = geckoView,
+      profile = PrivacyProfile.SHIELD,
+      isDesktopMode = false,
+      callbacks = dummyCallbacks,
+    )
+
+    val initialUrl = "https://example.com/start"
+    manager.loadUrl(tabId, initialUrl)
+    val genAtLoad = manager.getNavGeneration(tabId)
+    assertEquals(1L, genAtLoad)
+
+    // When Gecko finishes initiating the page, it reports onLocationChange
+    session.navigationDelegate?.onLocationChange(session, initialUrl, mutableListOf<GeckoSession.PermissionDelegate.ContentPermission>(), false)
+    session.progressDelegate?.onPageStop(session, true)
+
+    assertEquals("Initial load location change must not double increment generation", 1L, manager.getNavGeneration(tabId))
+  }
+
+  @Test
+  fun testStep24_internalAboutBlank_doesNotIncrementGeneration() = runBlocking {
+    val tab = tabManager.createTab("about:blank")
+    val tabId = tab.id
+    val settings = GeckoSessionSettings.Builder().usePrivateMode(true).build()
+    val session = GeckoSession(settings)
+    manager.setSessionForTesting(tabId, session)
+
+    val geckoView = GeckoView(context).apply { tag = tabId }
+    manager.attachView(
+      tabId = tabId,
+      geckoView = geckoView,
+      profile = PrivacyProfile.SHIELD,
+      isDesktopMode = false,
+      callbacks = dummyCallbacks,
+    )
+
+    val initialUrl = "https://example.com/home"
+    manager.loadUrl(tabId, initialUrl)
+    session.navigationDelegate?.onLocationChange(session, initialUrl, mutableListOf<GeckoSession.PermissionDelegate.ContentPermission>(), false)
+    val genBefore = manager.getNavGeneration(tabId)
+
+    // Transient about:blank or internal Gecko scheme
+    session.navigationDelegate?.onLocationChange(session, "about:blank", mutableListOf<GeckoSession.PermissionDelegate.ContentPermission>(), false)
+    assertEquals("about:blank must not increment generation", genBefore, manager.getNavGeneration(tabId))
+
+    session.navigationDelegate?.onLocationChange(session, "remmi://newtab", mutableListOf<GeckoSession.PermissionDelegate.ContentPermission>(), false)
+    assertEquals("remmi: internal URL must not increment generation", genBefore, manager.getNavGeneration(tabId))
+  }
 }
