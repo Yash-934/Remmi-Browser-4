@@ -249,6 +249,19 @@ class GeckoEngineManager private constructor(private val context: Context) {
     com.remmi.browser.util.DebugLogManager.log(msg)
   }
 
+  fun logNavIntent(
+    tabId: String,
+    navId: Long,
+    generation: Long,
+    trigger: String,
+    url: String
+  ) {
+    val now = android.os.SystemClock.elapsedRealtime()
+    val msg = "[FORENSIC][NAV_INTENT] tabId=$tabId navId=$navId generation=$generation trigger=$trigger url=$url elapsedRealtime=$now"
+    Log.i(TAG, msg)
+    com.remmi.browser.util.DebugLogManager.log(msg)
+  }
+
   fun logNavAllocation(
     tabId: String,
     navId: Long,
@@ -258,7 +271,36 @@ class GeckoEngineManager private constructor(private val context: Context) {
     previousNavId: Long,
     previousGeneration: Long
   ) {
-    val msg = "[FORENSIC][NAV_ALLOCATION] tabId=$tabId navId=$navId generation=$generation trigger=$trigger url=$url previousNavId=$previousNavId previousGeneration=$previousGeneration"
+    val now = android.os.SystemClock.elapsedRealtime()
+    val msg = "[FORENSIC][NAV_ALLOCATION] tabId=$tabId navId=$navId generation=$generation trigger=$trigger url=$url previousNavId=$previousNavId previousGeneration=$previousGeneration elapsedRealtime=$now"
+    Log.i(TAG, msg)
+    com.remmi.browser.util.DebugLogManager.log(msg)
+  }
+
+  fun logNavCorrelation(
+    tabId: String,
+    navId: Long,
+    generation: Long,
+    url: String,
+    trigger: String,
+    reason: String
+  ) {
+    val now = android.os.SystemClock.elapsedRealtime()
+    val msg = "[FORENSIC][NAV_CORRELATION] tabId=$tabId navId=$navId generation=$generation url=$url trigger=$trigger reason=$reason elapsedRealtime=$now"
+    Log.i(TAG, msg)
+    com.remmi.browser.util.DebugLogManager.log(msg)
+  }
+
+  fun logNavAllocationRejected(
+    tabId: String,
+    navId: Long,
+    generation: Long,
+    url: String,
+    trigger: String,
+    reason: String
+  ) {
+    val now = android.os.SystemClock.elapsedRealtime()
+    val msg = "[FORENSIC][NAV_ALLOCATION_REJECTED] tabId=$tabId navId=$navId generation=$generation url=$url trigger=$trigger reason=$reason elapsedRealtime=$now"
     Log.i(TAG, msg)
     com.remmi.browser.util.DebugLogManager.log(msg)
   }
@@ -273,7 +315,8 @@ class GeckoEngineManager private constructor(private val context: Context) {
     trigger: String,
     reason: String
   ) {
-    val msg = "[FORENSIC][NAV_DUPLICATE_CLASSIFICATION] tabId=$tabId navId=$navId generation=$generation previousNavId=$previousNavId previousGeneration=$previousGeneration classification=$classification trigger=$trigger reason=$reason"
+    val now = android.os.SystemClock.elapsedRealtime()
+    val msg = "[FORENSIC][NAV_DUPLICATE_CLASSIFICATION] tabId=$tabId navId=$navId generation=$generation previousNavId=$previousNavId previousGeneration=$previousGeneration classification=$classification trigger=$trigger reason=$reason elapsedRealtime=$now"
     Log.i(TAG, msg)
     com.remmi.browser.util.DebugLogManager.log(msg)
   }
@@ -372,6 +415,7 @@ class GeckoEngineManager private constructor(private val context: Context) {
     inFlightNavigations[tabId] = newNavId
     lastRecoveredGenerations.remove(tabId)
 
+    logNavIntent(tabId, newNavId, newGen, trigger, url)
     logNavAllocation(
       tabId = tabId,
       navId = newNavId,
@@ -504,15 +548,81 @@ class GeckoEngineManager private constructor(private val context: Context) {
   }
 
   fun checkPostNavFailure(tabId: String, failureType: String, currentUrl: String? = null) {
-    val record = lastSuccessfulNavigations[tabId] ?: return
+    val record = lastSuccessfulNavigations[tabId]
     val now = android.os.SystemClock.elapsedRealtime()
-    val elapsed = now - record.timestampElapsed
-    if (elapsed <= 15000L) {
-      val curr = currentUrl ?: lastObservedUrls[tabId] ?: lastDispatchedUrls[tabId] ?: "unknown"
-      val failMsg = "[FORENSIC][POST_NAV_FAILURE] tabId=$tabId navId=${record.navId} successfulUrl=${record.url} currentUrl=$curr gen=${record.gen} elapsedSinceNavStopMs=$elapsed failure=$failureType"
-      Log.e(TAG, failMsg)
-      com.remmi.browser.util.DebugLogManager.log(failMsg)
-      lastOriginalFailures[tabId] = failureType
+    val curr = currentUrl ?: lastObservedUrls[tabId] ?: lastDispatchedUrls[tabId] ?: "unknown"
+    val navId = record?.navId ?: getActiveNavId(tabId)
+    val gen = record?.gen ?: (navGenerations[tabId] ?: 0L)
+    val elapsed = if (record != null) now - record.timestampElapsed else -1L
+
+    val isNavActive = (navLoadingStates[tabId] == true) || inFlightNavigations.containsKey(tabId)
+    val recState = recoveryStates[tabId]
+    val isRecoveryInFlight = recState == RecoveryState.STARTING || recState == RecoveryState.IN_FLIGHT
+
+    when (failureType) {
+      "VIEW_ON_RELEASE", "DETACH_VIEW", "TAG_MISMATCH_DETACH" -> {
+        if (isNavActive || isRecoveryInFlight) {
+          val reason = if (isRecoveryInFlight) "view_disposed_during_recovery" else "view_disposed_during_active_nav"
+          val lifecycleMsg = "[FORENSIC][POST_NAV_LIFECYCLE] tabId=$tabId navId=$navId gen=$gen url=$curr event=VIEW_DISPOSED_DURING_ACTIVE_NAVIGATION failure=$failureType reason=$reason elapsedSinceNavStopMs=$elapsed"
+          Log.w(TAG, lifecycleMsg)
+          com.remmi.browser.util.DebugLogManager.log(lifecycleMsg)
+
+          val failMsg = "[FORENSIC][POST_NAV_FAILURE_CONFIRMED] tabId=$tabId navId=$navId successfulUrl=${record?.url ?: "none"} currentUrl=$curr gen=$gen elapsedSinceNavStopMs=$elapsed failure=$failureType reason=$reason"
+          Log.e(TAG, failMsg)
+          com.remmi.browser.util.DebugLogManager.log(failMsg)
+          lastOriginalFailures[tabId] = failureType
+        } else {
+          val reason = "view_disposed_after_terminal_success"
+          val lifecycleMsg = "[FORENSIC][POST_NAV_LIFECYCLE] tabId=$tabId navId=$navId gen=$gen url=$curr event=VIEW_DISPOSED_AFTER_NAV_SUCCESS reason=$reason elapsedSinceNavStopMs=$elapsed"
+          Log.i(TAG, lifecycleMsg)
+          com.remmi.browser.util.DebugLogManager.log(lifecycleMsg)
+
+          val suppMsg = "[FORENSIC][POST_NAV_FAILURE_SUPPRESSED] tabId=$tabId navId=$navId successfulUrl=${record?.url ?: "none"} currentUrl=$curr gen=$gen elapsedSinceNavStopMs=$elapsed failure=$failureType reason=$reason"
+          Log.i(TAG, suppMsg)
+          com.remmi.browser.util.DebugLogManager.log(suppMsg)
+        }
+      }
+      "CONTENT_CRASH", "CONTENT_KILL" -> {
+        val reason = "content_process_terminated"
+        val lifecycleMsg = "[FORENSIC][POST_NAV_LIFECYCLE] tabId=$tabId navId=$navId gen=$gen url=$curr event=CONTENT_PROCESS_FAILED failure=$failureType reason=$reason elapsedSinceNavStopMs=$elapsed"
+        Log.e(TAG, lifecycleMsg)
+        com.remmi.browser.util.DebugLogManager.log(lifecycleMsg)
+
+        if (record != null && elapsed in 0..15000L) {
+          val failMsg = "[FORENSIC][POST_NAV_FAILURE_CONFIRMED] tabId=$tabId navId=$navId successfulUrl=${record.url} currentUrl=$curr gen=$gen elapsedSinceNavStopMs=$elapsed failure=$failureType reason=$reason"
+          Log.e(TAG, failMsg)
+          com.remmi.browser.util.DebugLogManager.log(failMsg)
+          lastOriginalFailures[tabId] = failureType
+        }
+      }
+      "PAGE_STOP_FAILED", "NAV_ERROR" -> {
+        val reason = "navigation_terminal_error"
+        val lifecycleMsg = "[FORENSIC][POST_NAV_LIFECYCLE] tabId=$tabId navId=$navId gen=$gen url=$curr event=NAVIGATION_FAILED failure=$failureType reason=$reason elapsedSinceNavStopMs=$elapsed"
+        Log.e(TAG, lifecycleMsg)
+        com.remmi.browser.util.DebugLogManager.log(lifecycleMsg)
+
+        val failMsg = "[FORENSIC][POST_NAV_FAILURE_CONFIRMED] tabId=$tabId navId=$navId successfulUrl=${record?.url ?: "none"} currentUrl=$curr gen=$gen elapsedSinceNavStopMs=$elapsed failure=$failureType reason=$reason"
+        Log.e(TAG, failMsg)
+        com.remmi.browser.util.DebugLogManager.log(failMsg)
+        lastOriginalFailures[tabId] = failureType
+      }
+      "ABOUT_BLANK" -> {
+        if (record != null && elapsed in 0..15000L && record.url != "about:blank") {
+          val reason = "unexpected_post_nav_blank"
+          val failMsg = "[FORENSIC][POST_NAV_FAILURE_CONFIRMED] tabId=$tabId navId=$navId successfulUrl=${record.url} currentUrl=$curr gen=$gen elapsedSinceNavStopMs=$elapsed failure=ABOUT_BLANK reason=$reason"
+          Log.e(TAG, failMsg)
+          com.remmi.browser.util.DebugLogManager.log(failMsg)
+          lastOriginalFailures[tabId] = "ABOUT_BLANK"
+        }
+      }
+      else -> {
+        if (record != null && elapsed in 0..15000L) {
+          val failMsg = "[FORENSIC][POST_NAV_FAILURE_CONFIRMED] tabId=$tabId navId=$navId successfulUrl=${record.url} currentUrl=$curr gen=$gen elapsedSinceNavStopMs=$elapsed failure=$failureType reason=other"
+          Log.e(TAG, failMsg)
+          com.remmi.browser.util.DebugLogManager.log(failMsg)
+          lastOriginalFailures[tabId] = failureType
+        }
+      }
     }
   }
 
@@ -1026,27 +1136,38 @@ class GeckoEngineManager private constructor(private val context: Context) {
           if (request.isRedirect && url.isNotBlank() && !isInternalOrIgnoredUrl(url)) {
             recordRecoveryRedirect(tabId, url)
           }
-        } else if (activeRecovery == null && url.isNotBlank() && !isInternalOrIgnoredUrl(url)) {
-          // In-page link navigation request
-          if (!request.isRedirect && request.hasUserGesture) {
-            val prevDispatched = lastDispatchedUrls[tabId]
-            val prevObserved = lastObservedUrls[tabId]
-            val isEquivalentToDispatched = areUrlsEquivalent(prevDispatched, url)
-            val isEquivalentToObserved = areUrlsEquivalent(prevObserved, url)
-            val isSameUrl = isEquivalentToDispatched || isEquivalentToObserved
+          logNavCorrelation(tabId, navId, gen, url, "onLoadRequest", "recovery_inflight")
+        } else if (url.isBlank() || isInternalOrIgnoredUrl(url)) {
+          logNavAllocationRejected(tabId, navId, gen, url, "onLoadRequest", "internal_or_ignored")
+        } else {
+          val isInFlight = inFlightNavigations.containsKey(tabId)
+          val prevDispatched = lastDispatchedUrls[tabId]
+          val prevObserved = lastObservedUrls[tabId]
+          val isEquivalentToDispatched = areUrlsEquivalent(prevDispatched, url)
+          val isEquivalentToObserved = areUrlsEquivalent(prevObserved, url)
+          val isSameUrl = isEquivalentToDispatched || isEquivalentToObserved
 
-            if (!isSameUrl) {
-              val prevUrl = prevObserved ?: prevDispatched
-              lastDispatchedUrls[tabId] = url
-              val (newNavId, newGen) = allocateNavigationGeneration(tabId, "USER_GESTURE", url)
-              val inPageMsg = "[FORENSIC][IN_PAGE_NAV] tabId=$tabId session=$sessId view=$viewId navId=$newNavId url=$url prevUrl=$prevUrl newGen=$newGen trigger=onLoadRequest hasUserGesture=${request.hasUserGesture} elapsedRealtime=$now"
-              Log.i(TAG, inPageMsg)
-              com.remmi.browser.util.DebugLogManager.log(inPageMsg)
+          if (request.isRedirect) {
+            logNavCorrelation(tabId, navId, gen, url, "onLoadRequest", "redirect")
+          } else if (isInFlight && (isSameUrl || isEquivalentToDispatched)) {
+            // Belongs to the existing in-flight app navigation intent (e.g. loadUrl, reload, etc.)
+            logNavCorrelation(tabId, navId, gen, url, "onLoadRequest", "correlated_to_inflight_intent")
+          } else if (isSameUrl && !request.hasUserGesture) {
+            logNavCorrelation(tabId, navId, gen, url, "onLoadRequest", "duplicate_or_same_url")
+          } else if (request.hasUserGesture && !isSameUrl) {
+            // Genuine user-gesture link click from inside the page!
+            val prevUrl = prevObserved ?: prevDispatched
+            lastDispatchedUrls[tabId] = url
+            val (newNavId, newGen) = allocateNavigationGeneration(tabId, "USER_GESTURE", url)
+            val inPageMsg = "[FORENSIC][IN_PAGE_NAV] tabId=$tabId session=$sessId view=$viewId navId=$newNavId url=$url prevUrl=$prevUrl newGen=$newGen trigger=onLoadRequest hasUserGesture=${request.hasUserGesture} elapsedRealtime=$now"
+            Log.i(TAG, inPageMsg)
+            com.remmi.browser.util.DebugLogManager.log(inPageMsg)
 
-              val navReqMsg = "[FORENSIC] [NAV_REQUESTED] tabId=$tabId session=$sessId view=$viewId navId=$newNavId url=$url gen=$newGen trigger=USER_GESTURE elapsedRealtime=$now"
-              Log.i(TAG, navReqMsg)
-              com.remmi.browser.util.DebugLogManager.log(navReqMsg)
-            }
+            val navReqMsg = "[FORENSIC] [NAV_REQUESTED] tabId=$tabId session=$sessId view=$viewId navId=$newNavId url=$url gen=$newGen trigger=USER_GESTURE elapsedRealtime=$now"
+            Log.i(TAG, navReqMsg)
+            com.remmi.browser.util.DebugLogManager.log(navReqMsg)
+          } else {
+            logNavCorrelation(tabId, navId, gen, url, "onLoadRequest", if (isInFlight) "inflight_active" else "unchanged")
           }
         }
 
@@ -1135,20 +1256,25 @@ class GeckoEngineManager private constructor(private val context: Context) {
             classification = "APP_REQUEST_MATCH"
             lastDispatchedUrls[tabId] = url
             inFlightNavigations.remove(tabId)
+            logNavCorrelation(tabId, activeNavId, genBefore, url, "onLocationChange", "app_request_match")
           } else if (isSameAsObserved) {
             classification = "DUPLICATE_OBSERVATION"
             lastDispatchedUrls[tabId] = url
+            logNavCorrelation(tabId, activeNavId, genBefore, url, "onLocationChange", "duplicate_observation")
           } else if (lastRedirectUrls[tabId] != null && areUrlsEquivalent(lastRedirectUrls[tabId], url)) {
             classification = "REDIRECT"
             lastDispatchedUrls[tabId] = url
+            logNavCorrelation(tabId, activeNavId, genBefore, url, "onLocationChange", "redirect")
           } else if (isInFlight) {
             // Continuation / redirect / location resolution for existing in-flight navigation (prevent duplicate navId)
             classification = "IN_FLIGHT_LOCATION_MATCH"
             lastDispatchedUrls[tabId] = url
+            logNavCorrelation(tabId, activeNavId, genBefore, url, "onLocationChange", "in_flight_location_match")
           } else if (!hostChanged && !hasUserGesture) {
             // Same-host SPA / script history change (e.g. DuckDuckGo replaceState / pushState)
             classification = "SAME_DOCUMENT_SPA"
             lastDispatchedUrls[tabId] = url
+            logNavCorrelation(tabId, activeNavId, genBefore, url, "onLocationChange", "same_document_spa")
             val spaMsg = "[FORENSIC][NAV_SAME_DOC_SPA] tabId=$tabId session=$sessId view=$viewId navId=$activeNavId url=$url prevUrl=${prevObserved ?: prevDispatched} gen=$genBefore hasUserGesture=false elapsedRealtime=$now"
             Log.i(TAG, spaMsg)
             com.remmi.browser.util.DebugLogManager.log(spaMsg)
@@ -1360,6 +1486,10 @@ class GeckoEngineManager private constructor(private val context: Context) {
             sessionCallbacks[tabId]?.onProgressChange(0)
             return
           }
+        }
+
+        if (!success) {
+          checkPostNavFailure(tabId, "PAGE_STOP_FAILED", currUrl)
         }
 
         val oldProg = navProgressStates[tabId] ?: 0
@@ -2214,6 +2344,14 @@ class GeckoEngineManager private constructor(private val context: Context) {
         previousNavId = currentNavIds[tabId] ?: 0L,
         previousGeneration = gen,
         classification = "APP_LOAD_URL",
+        trigger = "loadUrl",
+        reason = "url_already_dispatched"
+      )
+      logNavAllocationRejected(
+        tabId = tabId,
+        navId = navId,
+        generation = gen,
+        url = targetUrl,
         trigger = "loadUrl",
         reason = "url_already_dispatched"
       )
