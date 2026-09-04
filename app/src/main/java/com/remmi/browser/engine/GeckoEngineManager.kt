@@ -589,11 +589,11 @@ class GeckoEngineManager private constructor(private val context: Context) {
         com.remmi.browser.util.DebugLogManager.log(lifecycleMsg)
 
         if (!isNavActive && record != null) {
-          val suppMsg = "[FORENSIC][POST_NAV_FAILURE_SUPPRESSED] tabId=$tabId navId=$navId successfulUrl=${record.url} currentUrl=$curr gen=$gen elapsedSinceNavStopMs=$elapsed failure=$failureType reason=content_kill_after_terminal_success"
+          val suppMsg = "[FORENSIC][POST_NAV_FAILURE_SUPPRESSED] tabId=$tabId navId=$navId successfulUrl=${record?.url ?: "none"} currentUrl=$curr gen=$gen elapsedSinceNavStopMs=$elapsed failure=$failureType reason=content_kill_after_terminal_success"
           Log.i(TAG, suppMsg)
           com.remmi.browser.util.DebugLogManager.log(suppMsg)
-        } else if (record != null && elapsed in 0..15000L) {
-          val failMsg = "[FORENSIC][POST_NAV_FAILURE_CONFIRMED] tabId=$tabId navId=$navId successfulUrl=${record.url} currentUrl=$curr gen=$gen elapsedSinceNavStopMs=$elapsed failure=$failureType reason=$reason"
+        } else if (elapsed in 0..15000L || record == null) {
+          val failMsg = "[FORENSIC][POST_NAV_FAILURE_CONFIRMED] tabId=$tabId navId=$navId successfulUrl=${record?.url ?: "none"} currentUrl=$curr gen=$gen elapsedSinceNavStopMs=$elapsed failure=$failureType reason=$reason"
           Log.e(TAG, failMsg)
           com.remmi.browser.util.DebugLogManager.log(failMsg)
           lastOriginalFailures[tabId] = failureType
@@ -617,7 +617,7 @@ class GeckoEngineManager private constructor(private val context: Context) {
           com.remmi.browser.util.DebugLogManager.log(suppMsg)
         } else if (record != null && elapsed in 0..15000L && record.url != "about:blank") {
           val reason = "unexpected_post_nav_blank"
-          val failMsg = "[FORENSIC][POST_NAV_FAILURE_CONFIRMED] tabId=$tabId navId=$navId successfulUrl=${record.url} currentUrl=$curr gen=$gen elapsedSinceNavStopMs=$elapsed failure=ABOUT_BLANK reason=$reason"
+          val failMsg = "[FORENSIC][POST_NAV_FAILURE_CONFIRMED] tabId=$tabId navId=$navId successfulUrl=${record?.url ?: "none"} currentUrl=$curr gen=$gen elapsedSinceNavStopMs=$elapsed failure=ABOUT_BLANK reason=$reason"
           Log.e(TAG, failMsg)
           com.remmi.browser.util.DebugLogManager.log(failMsg)
           lastOriginalFailures[tabId] = "ABOUT_BLANK"
@@ -625,11 +625,11 @@ class GeckoEngineManager private constructor(private val context: Context) {
       }
       else -> {
         if (!isNavActive && record != null) {
-          val suppMsg = "[FORENSIC][POST_NAV_FAILURE_SUPPRESSED] tabId=$tabId navId=$navId successfulUrl=${record.url} currentUrl=$curr gen=$gen elapsedSinceNavStopMs=$elapsed failure=$failureType reason=content_kill_after_terminal_success"
+          val suppMsg = "[FORENSIC][POST_NAV_FAILURE_SUPPRESSED] tabId=$tabId navId=$navId successfulUrl=${record?.url ?: "none"} currentUrl=$curr gen=$gen elapsedSinceNavStopMs=$elapsed failure=$failureType reason=content_kill_after_terminal_success"
           Log.i(TAG, suppMsg)
           com.remmi.browser.util.DebugLogManager.log(suppMsg)
-        } else if (record != null && elapsed in 0..15000L) {
-          val failMsg = "[FORENSIC][POST_NAV_FAILURE_CONFIRMED] tabId=$tabId navId=$navId successfulUrl=${record.url} currentUrl=$curr gen=$gen elapsedSinceNavStopMs=$elapsed failure=$failureType reason=other"
+        } else if (elapsed in 0..15000L || record == null) {
+          val failMsg = "[FORENSIC][POST_NAV_FAILURE_CONFIRMED] tabId=$tabId navId=$navId successfulUrl=${record?.url ?: "none"} currentUrl=$curr gen=$gen elapsedSinceNavStopMs=$elapsed failure=$failureType reason=other"
           Log.e(TAG, failMsg)
           com.remmi.browser.util.DebugLogManager.log(failMsg)
           lastOriginalFailures[tabId] = failureType

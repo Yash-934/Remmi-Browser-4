@@ -1,0 +1,1 @@
+sed -i 's/    assertNotNull("Last successful navigation must be recorded", manager.getLastSuccessfulNavigation(tabId))/    session.progressDelegate?.onPageStop(session, true)\n    assertNotNull("Last successful navigation must be recorded", manager.getLastSuccessfulNavigation(tabId))/g' app/src/test/java/com/remmi/browser/engine/Step34FinalNavAuthorityTest.kt

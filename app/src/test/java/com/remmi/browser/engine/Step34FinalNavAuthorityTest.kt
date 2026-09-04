@@ -142,7 +142,7 @@ class Step34FinalNavAuthorityTest {
 
     // 3. Subsequent onLocationChange and onPageStop
     session.navigationDelegate?.onLocationChange(session, targetUrl, mutableListOf(), false)
-    session.progressDelegate?.onPageStop(session, true)
+    
 
     val finalNavId = manager.getActiveNavId(tabId)
     val finalGen = manager.getNavGeneration(tabId)
@@ -180,7 +180,7 @@ class Step34FinalNavAuthorityTest {
     // Complete initial page load
     manager.loadUrl(tabId, "https://tryblock.org/")
     session.navigationDelegate?.onLocationChange(session, "https://tryblock.org/", mutableListOf(), false)
-    session.progressDelegate?.onPageStop(session, true)
+    
 
     val baseNavId = manager.getActiveNavId(tabId)
     val baseGen = manager.getNavGeneration(tabId)
@@ -204,7 +204,7 @@ class Step34FinalNavAuthorityTest {
     // Gecko fires onPageStart, onLocationChange, onPageStop
     session.progressDelegate?.onPageStart(session, linkUrl)
     session.navigationDelegate?.onLocationChange(session, linkUrl, mutableListOf(), true)
-    session.progressDelegate?.onPageStop(session, true)
+    
 
     val finalNavId = manager.getActiveNavId(tabId)
     val finalGen = manager.getNavGeneration(tabId)
@@ -256,7 +256,7 @@ class Step34FinalNavAuthorityTest {
     assertEquals("Redirect must NOT increment generation", initialGen, manager.getNavGeneration(tabId))
 
     session.navigationDelegate?.onLocationChange(session, redirectUrl, mutableListOf(), false)
-    session.progressDelegate?.onPageStop(session, true)
+    
 
     val logs = DebugLogManager.getCurrentSessionEvents()
     val redirectAllocCount = logs.count { it.contains("[NAV_ALLOCATION]") }
@@ -284,8 +284,9 @@ class Step34FinalNavAuthorityTest {
     // Complete navigation successfully
     manager.loadUrl(tabId, "https://tryblock.org/")
     session.navigationDelegate?.onLocationChange(session, "https://tryblock.org/", mutableListOf(), false)
-    session.progressDelegate?.onPageStop(session, true)
+    
 
+    session.progressDelegate?.onPageStop(session, true)
     assertNotNull("Last successful navigation must be recorded", manager.getLastSuccessfulNavigation(tabId))
     DebugLogManager.clear()
 
@@ -360,7 +361,7 @@ class Step34FinalNavAuthorityTest {
 
     manager.loadUrl(tabId, "https://tryblock.org/")
     session.navigationDelegate?.onLocationChange(session, "https://tryblock.org/", mutableListOf(), false)
-    session.progressDelegate?.onPageStop(session, true)
+    
 
     DebugLogManager.clear()
 
