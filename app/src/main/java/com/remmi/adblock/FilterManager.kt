@@ -192,26 +192,34 @@ class FilterManager(
     return _subscriptions.value.filter { it.enabled }.sumOf { it.ruleCount }
   }
 
-  fun logAdblockStatus() {
+  fun logAdblockStatus(source: String = "startup") {
     val easylist = _subscriptions.value.find { it.id == "easylist" }
     val easyprivacy = _subscriptions.value.find { it.id == "easyprivacy" }
+    val fanboy = _subscriptions.value.find { it.id == "fanboy_annoyance" }
+    val brave = _subscriptions.value.find { it.id == "brave_unbreak" }
     val totalActive = getTotalActiveRules()
     val isNative = adblockBridge.isNativeAvailable()
     val gen = adblockBridge.getEngineGeneration()
     val blockedCount = adblockBridge.totalBlockedCount.get()
+    val totalCompiled = adblockBridge.getLoadedRulesCount()
+    val ts = System.currentTimeMillis()
+    val sess = com.remmi.browser.util.CrashHandlerHelper.currentSessionId
 
     Log.i(
       TAG,
-      "[ADBLOCK_STATUS] native=$isNative easylistDownloaded=${(easylist?.lastUpdated ?: 0L) > 0L} easyprivacyDownloaded=${(easyprivacy?.lastUpdated ?: 0L) > 0L} easylistRules=${easylist?.ruleCount ?: 0} easyprivacyRules=${easyprivacy?.ruleCount ?: 0} totalActiveRules=$totalActive engineGeneration=$gen"
+      "[ADBLOCK_RULESET_STATUS] source=$source sessionId=$sess activeGeneration=$gen timestamp=$ts isNativeServing=$isNative totalCompiledRules=$totalCompiled totalActiveRawRules=$totalActive easylistDownloaded=${(easylist?.lastUpdated ?: 0L) > 0L} easyprivacyDownloaded=${(easyprivacy?.lastUpdated ?: 0L) > 0L} fanboyDownloaded=${(fanboy?.lastUpdated ?: 0L) > 0L} braveDownloaded=${(brave?.lastUpdated ?: 0L) > 0L} blockedCount=$blockedCount"
     )
-    Log.i(TAG, "[ADBLOCK_ENGINE] generation=$gen activeRules=$totalActive native=$isNative")
-    Log.i(TAG, "[ADBLOCK_METRICS] blocked=$blockedCount")
+    com.remmi.browser.util.DebugLogManager.log(
+      "[ADBLOCK_RULESET_STATUS] source=$source activeGen=$gen native=$isNative compiled=$totalCompiled raw=$totalActive"
+    )
   }
 
   private suspend fun loadPersistedRulesIntoBridgeAsync(source: String = "unknown"): Int = withContext(Dispatchers.IO) {
     mutex.withLock {
       val dir = filterDir ?: return@withLock 0
-      Log.d(TAG, "[ADBLOCK_FILTER_LOAD_START] source=$source")
+      val currentGen = adblockBridge.getEngineGeneration()
+      Log.i(TAG, "[FILTER_LIFECYCLE] list=all stage=COMPILE_STARTED source=$source activeGeneration=$currentGen")
+      com.remmi.browser.util.DebugLogManager.log("[FILTER_LIFECYCLE] list=all stage=COMPILE_STARTED source=$source activeGen=$currentGen")
       val defaultRules = StringBuilder()
       val additionalRules = StringBuilder()
       val rulesSummary = StringBuilder()
@@ -241,14 +249,24 @@ class FilterManager(
         }
       }
       if (defaultRules.isNotBlank() || additionalRules.isNotBlank()) {
-        val compiled = adblockBridge.compileRules(defaultRules.toString(), additionalRules.toString(), source = source)
-        Log.d(TAG, "[ADBLOCK_COMPILE] name=all compiled=$compiled source=$source")
-        Log.d(TAG, "[ADBLOCK_RULES] $rulesSummary total_compiled=$compiled")
-        logAdblockStatus()
-        return@withLock compiled
+        try {
+          val compiled = adblockBridge.compileRules(defaultRules.toString(), additionalRules.toString(), source = source)
+          val newGen = adblockBridge.getEngineGeneration()
+          Log.i(TAG, "[FILTER_LIFECYCLE] list=all stage=COMPILE_SUCCESS total_compiled=$compiled newGeneration=$newGen source=$source")
+          Log.i(TAG, "[FILTER_LIFECYCLE] list=all stage=ACTIVATED generation=$newGen isNativeServing=${adblockBridge.isNativeAvailable()} compiledRules=$compiled")
+          com.remmi.browser.util.DebugLogManager.log("[FILTER_LIFECYCLE] list=all stage=ACTIVATED gen=$newGen compiled=$compiled")
+          Log.d(TAG, "[ADBLOCK_COMPILE] name=all compiled=$compiled source=$source")
+          Log.d(TAG, "[ADBLOCK_RULES] $rulesSummary total_compiled=$compiled")
+          logAdblockStatus(source = source)
+          return@withLock compiled
+        } catch (t: Throwable) {
+          Log.e(TAG, "[FILTER_LIFECYCLE] list=all stage=ACTIVATION_FAILED error=${t.message}", t)
+          com.remmi.browser.util.DebugLogManager.log("[FILTER_LIFECYCLE] list=all stage=ACTIVATION_FAILED error=${t.message}")
+          return@withLock 0
+        }
       } else {
         Log.d(TAG, "[ADBLOCK_RULES] $rulesSummary total_compiled=0 (using default tracker rules)")
-        logAdblockStatus()
+        logAdblockStatus(source = source)
       }
       return@withLock 0
     }
@@ -315,7 +333,8 @@ class FilterManager(
 
   private suspend fun updateSubscription(sub: FilterSubscription): Boolean = withContext(Dispatchers.IO) {
     if (sub.url.isBlank()) return@withContext false
-    Log.i(TAG, "Downloading filter subscription '${sub.title}' from ${sub.url}...")
+    Log.i(TAG, "[FILTER_LIFECYCLE] list=${sub.id} stage=DOWNLOAD_STARTED url=${sub.url}")
+    com.remmi.browser.util.DebugLogManager.log("[FILTER_LIFECYCLE] list=${sub.id} stage=DOWNLOAD_STARTED")
     try {
       val isGhost = CurrentTorRoute.isGhostActive || NetworkRouteAuthority.isOnionDestination(sub.url)
       val client = NetworkRouteAuthority.createHttpClient(
@@ -331,12 +350,13 @@ class FilterManager(
 
       val response = client.newCall(request).execute()
       if (!response.isSuccessful) {
-        Log.w(TAG, "Filter download failed for ${sub.id} with HTTP ${response.code}")
+        Log.w(TAG, "[FILTER_LIFECYCLE] list=${sub.id} stage=DOWNLOAD_FAILED httpCode=${response.code}")
         return@withContext false
       }
 
       val body = response.body?.string() ?: return@withContext false
-      Log.d(TAG, "[ADBLOCK_LIST] name=${sub.id} downloaded=true bytes=${body.length}")
+      Log.i(TAG, "[FILTER_LIFECYCLE] list=${sub.id} stage=DOWNLOAD_COMPLETED bytes=${body.length}")
+      com.remmi.browser.util.DebugLogManager.log("[FILTER_LIFECYCLE] list=${sub.id} stage=DOWNLOAD_COMPLETED bytes=${body.length}")
 
       // Max size limit: 15 MB
       if (body.length > 15 * 1024 * 1024) {

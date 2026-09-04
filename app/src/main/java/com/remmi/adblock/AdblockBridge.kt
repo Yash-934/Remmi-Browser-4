@@ -928,6 +928,10 @@ class AdblockBridge {
           com.remmi.browser.util.DebugLogManager.log(swapDoneMsg)
           Log.d(TAG, "[ADBLOCK_ENGINE_SWAP] oldGeneration=$oldGen newGeneration=$newGen rules=$compiledCount")
 
+          try {
+            BlockExtension.getInstance(this).notifyRulesUpdated()
+          } catch (_: Throwable) {}
+
           val currentJobId = jobId
           postSwapScheduler.schedule({
             val snap = com.remmi.browser.util.ProcessMemoryTelemetry.captureSnapshot()

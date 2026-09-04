@@ -579,6 +579,29 @@ class BlockExtension private constructor(private val adblockBridge: AdblockBridg
                   val wDoneMsg = "[FORENSIC][WEBEXT_WORKER_DONE] requestId=$requestId thread=$workerThread elapsed=$wElapsed ms blocked=${decision.blocked} rule=${decision.ruleId} elapsedRealtime=$wDoneRealtime"
                   Log.d(TAG, wDoneMsg)
 
+                  val listResponsible = when {
+                    decision.defaultMatched -> "default"
+                    decision.additionalMatched -> "additional"
+                    decision.ruleSource == "KotlinFallback" -> "builtin_or_custom"
+                    else -> "none"
+                  }
+                  val host = try { java.net.URI(if (url.contains("://")) url else "https://$url").host?.lowercase() ?: "" } catch (_: Exception) { "" }
+                  val decisionDiagMsg = "[FORENSIC][DECISION_DIAG] url=$url domain=$host type=$resourceType decision=${if (decision.blocked) "BLOCK" else "ALLOW"} ruleId=${decision.ruleId} ruleSource=${decision.ruleSource} generation=${decision.engineGeneration} list=$listResponsible"
+                  Log.d(TAG, decisionDiagMsg)
+                  com.remmi.browser.util.DebugLogManager.log(decisionDiagMsg)
+
+                  if (url.contains("adblock-tester.com") || sourceUrl.contains("adblock-tester.com")) {
+                    val failureReason = when {
+                      decision.blocked -> "BLOCKED"
+                      decision.defaultException || decision.additionalException -> "D_EXCEPTION_ALLOW"
+                      adblockBridge.getLoadedRulesCount() <= 62 -> "B_RULESET_INACTIVE_DEFAULT_ONLY"
+                      else -> "A_NO_MATCHING_RULE"
+                    }
+                    val adblockTesterLog = "[FORENSIC][ADBLOCK_TESTER_DIAG] url=$url type=$resourceType decision=${if (decision.blocked) "BLOCK" else "ALLOW"} reason=$failureReason activeRules=${adblockBridge.getLoadedRulesCount()} generation=${decision.engineGeneration} isNative=${adblockBridge.isNativeAvailable()}"
+                    Log.i(TAG, adblockTesterLog)
+                    com.remmi.browser.util.DebugLogManager.log(adblockTesterLog)
+                  }
+
                   val resp = JSONObject().apply {
                     put("type", "SHOULD_BLOCK_RESULT")
                     put("ok", true)
@@ -720,6 +743,17 @@ class BlockExtension private constructor(private val adblockBridge: AdblockBridg
                       }
                     } else {
                       val cosmetic = adblockBridge.getCosmeticResources(url, classes, ids, exceptions)
+                      if (url.contains("adblock-tester.com") || hostname.contains("adblock-tester.com")) {
+                        val hideCount = cosmetic.hideSelectors.size
+                        val cosmeticReason = when {
+                          hideCount > 0 -> "COSMETIC_RULES_APPLIED"
+                          adblockBridge.getLoadedRulesCount() <= 62 -> "F_COSMETIC_UNAVAILABLE_DEFAULT_ONLY"
+                          else -> "A_NO_COSMETIC_RULES_FOR_PAGE"
+                        }
+                        val cosmeticDiag = "[FORENSIC][ADBLOCK_TESTER_COSMETIC_DIAG] host=$hostname hideCount=$hideCount reason=$cosmeticReason activeRules=${adblockBridge.getLoadedRulesCount()} generation=${cosmetic.generation}"
+                        Log.i(TAG, cosmeticDiag)
+                        com.remmi.browser.util.DebugLogManager.log(cosmeticDiag)
+                      }
                       JSONObject().apply {
                         put("type", "COSMETIC_RESOURCES_RESULT")
                         put("ok", cosmetic.ok)
@@ -1134,6 +1168,26 @@ class BlockExtension private constructor(private val adblockBridge: AdblockBridg
     pendingHtmlRequests.entries.removeIf { (_, cb) ->
       // Purge stale pending requests older than 30s
       false
+    }
+  }
+
+  fun notifyRulesUpdated() {
+    val gen = adblockBridge.getEngineGeneration()
+    Log.i(TAG, "[ADBLOCK_RULES_UPDATED_NOTIFY] generation=$gen")
+    synchronized(portLock) {
+      val currentPort = activePort
+      if (currentPort != null) {
+        try {
+          currentPort.postMessage(
+            JSONObject().apply {
+              put("type", "RULES_UPDATED")
+              put("generation", gen)
+            }
+          )
+        } catch (e: Exception) {
+          Log.w(TAG, "Failed sending RULES_UPDATED to port: ${e.message}")
+        }
+      }
     }
   }
 
