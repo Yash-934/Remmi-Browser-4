@@ -139,13 +139,32 @@ class GeckoEngineManager private constructor(private val context: Context) {
     val terminationType: String,
   )
 
+  enum class RecoveryStage {
+    DISPATCHED,
+    NAV_IN_FLIGHT,
+    SUCCESS,
+    FAILED,
+  }
+
+  data class ActiveRecovery(
+    val tabId: String,
+    val session: GeckoSession,
+    val targetUrl: String,
+    val generation: Long,
+    val startTime: Long,
+    var stage: RecoveryStage = RecoveryStage.DISPATCHED,
+    var timeoutRunnable: Runnable? = null,
+  )
+
   private val attachedViews = mutableMapOf<String, GeckoView>()
   private val _viewAttachmentStates = mutableMapOf<String, MutableStateFlow<Boolean>>()
   private val navGenerations = mutableMapOf<String, Long>()
   private val lastRecoveredGenerations = mutableMapOf<String, Long>()
   private val pendingNavigations = mutableMapOf<String, PendingNavigation>()
   private val pendingContentRecoveries = mutableMapOf<String, PendingContentRecovery>()
+  private val activeRecoveries = mutableMapOf<String, ActiveRecovery>()
   private val lastDispatchedUrls = mutableMapOf<String, String>()
+  private val lastObservedUrls = mutableMapOf<String, String>()
   private val dispatchedNavigationsHistory = mutableMapOf<String, MutableList<String>>()
 
   // Optional test hook for intercepting loadUri calls in JVM unit tests
@@ -171,6 +190,20 @@ class GeckoEngineManager private constructor(private val context: Context) {
   fun getDispatchedNavigations(tabId: String): List<String> = dispatchedNavigationsHistory[tabId]?.toList() ?: emptyList()
   fun hasPendingContentRecovery(tabId: String): Boolean = pendingContentRecoveries.containsKey(tabId)
   fun getPendingContentRecovery(tabId: String): PendingContentRecovery? = pendingContentRecoveries[tabId]
+  fun hasActiveRecovery(tabId: String): Boolean = activeRecoveries.containsKey(tabId)
+  fun getActiveRecovery(tabId: String): ActiveRecovery? = activeRecoveries[tabId]
+
+  @VisibleForTesting
+  fun triggerRecoveryTimeoutForTest(tabId: String) {
+    val active = activeRecoveries.remove(tabId) ?: return
+    active.timeoutRunnable?.let { mainHandler.removeCallbacks(it) }
+    active.stage = RecoveryStage.FAILED
+    val sessId = "0x" + Integer.toHexString(System.identityHashCode(active.session))
+    val viewId = attachedViews[tabId]?.let { "0x" + Integer.toHexString(System.identityHashCode(it)) } ?: "none"
+    val toMsg = "[FORENSIC][CONTENT_RECOVERY_TIMEOUT] tabId=$tabId session=$sessId view=$viewId url=${active.targetUrl} gen=${active.generation} stage=DISPATCHED elapsedRealtime=${android.os.SystemClock.elapsedRealtime()}"
+    Log.w(TAG, toMsg)
+    com.remmi.browser.util.DebugLogManager.log(toMsg)
+  }
 
   @VisibleForTesting
   internal fun setRuntimeForTesting(runtime: GeckoRuntime?) {
@@ -528,6 +561,34 @@ class GeckoEngineManager private constructor(private val context: Context) {
         com.remmi.browser.util.DebugLogManager.log(navLocMsg)
 
         url?.let {
+          lastObservedUrls[tabId] = it
+        }
+
+        // Recovery In-Flight Detection
+        val activeRecovery = activeRecoveries[tabId]
+        if (activeRecovery != null && 
+            activeRecovery.session === session && 
+            activeRecovery.generation == gen && 
+            activeRecovery.stage == RecoveryStage.DISPATCHED) {
+          if (url != null && url.isNotBlank() && url != "about:blank") {
+            val isTargetMatch = (url == activeRecovery.targetUrl) || 
+                                url.startsWith(activeRecovery.targetUrl) ||
+                                try {
+                                  val activeHost = java.net.URI(if (activeRecovery.targetUrl.contains("://")) activeRecovery.targetUrl else "https://${activeRecovery.targetUrl}").host
+                                  val newHost = java.net.URI(if (url.contains("://")) url else "https://$url").host
+                                  !activeHost.isNullOrBlank() && activeHost.equals(newHost, ignoreCase = true)
+                                } catch (_: Exception) { false }
+
+            if (isTargetMatch) {
+              activeRecovery.stage = RecoveryStage.NAV_IN_FLIGHT
+              val inFlightMsg = "[FORENSIC][CONTENT_RECOVERY_NAV_IN_FLIGHT] tabId=$tabId session=$sessId view=$viewId url=$url targetUrl=${activeRecovery.targetUrl} gen=$gen elapsedRealtime=$now"
+              Log.i(TAG, inFlightMsg)
+              com.remmi.browser.util.DebugLogManager.log(inFlightMsg)
+            }
+          }
+        }
+
+        url?.let {
           if (it.isNotBlank() && it != "about:blank") {
             try {
               val host = java.net.URI(if (it.contains("://")) it else "https://$it").host
@@ -581,12 +642,43 @@ class GeckoEngineManager private constructor(private val context: Context) {
       override fun onPageStop(session: GeckoSession, success: Boolean) {
         val sessId = "0x" + Integer.toHexString(System.identityHashCode(session))
         val viewId = attachedViews[tabId]?.let { "0x" + Integer.toHexString(System.identityHashCode(it)) } ?: "none"
-        val currUrl = lastDispatchedUrls[tabId] ?: "unknown"
+        val currUrl = lastObservedUrls[tabId] ?: lastDispatchedUrls[tabId] ?: "unknown"
         val gen = navGenerations[tabId] ?: 0L
         val now = android.os.SystemClock.elapsedRealtime()
         val stopMsg = "[FORENSIC] [NAV_STOP] tabId=$tabId session=$sessId view=$viewId url=$currUrl success=$success gen=$gen elapsedRealtime=$now"
         Log.i(TAG, stopMsg)
         com.remmi.browser.util.DebugLogManager.log(stopMsg)
+
+        val activeRecovery = activeRecoveries[tabId]
+        if (activeRecovery != null && 
+            activeRecovery.session === session && 
+            activeRecovery.generation == gen) {
+          val isAboutBlank = (currUrl == "about:blank")
+          
+          val targetMatches = (currUrl == activeRecovery.targetUrl) || 
+                              currUrl.startsWith(activeRecovery.targetUrl) ||
+                              try {
+                                val activeHost = java.net.URI(if (activeRecovery.targetUrl.contains("://")) activeRecovery.targetUrl else "https://${activeRecovery.targetUrl}").host
+                                val currHost = java.net.URI(if (currUrl.contains("://")) currUrl else "https://$currUrl").host
+                                !activeHost.isNullOrBlank() && activeHost.equals(currHost, ignoreCase = true)
+                              } catch (_: Exception) { false }
+
+          if (success && activeRecovery.stage == RecoveryStage.NAV_IN_FLIGHT && targetMatches && !isAboutBlank) {
+            activeRecovery.timeoutRunnable?.let { mainHandler.removeCallbacks(it) }
+            activeRecovery.stage = RecoveryStage.SUCCESS
+            activeRecoveries.remove(tabId)
+            val succMsg = "[FORENSIC][CONTENT_RECOVERY_NAV_SUCCESS] tabId=$tabId session=$sessId view=$viewId url=$currUrl targetUrl=${activeRecovery.targetUrl} gen=$gen elapsedRealtime=$now"
+            Log.i(TAG, succMsg)
+            com.remmi.browser.util.DebugLogManager.log(succMsg)
+          } else if (!success && (activeRecovery.stage == RecoveryStage.NAV_IN_FLIGHT || targetMatches)) {
+            activeRecovery.timeoutRunnable?.let { mainHandler.removeCallbacks(it) }
+            activeRecovery.stage = RecoveryStage.FAILED
+            activeRecoveries.remove(tabId)
+            val failMsg = "[FORENSIC][CONTENT_RECOVERY_NAV_FAILED] tabId=$tabId session=$sessId view=$viewId url=$currUrl targetUrl=${activeRecovery.targetUrl} gen=$gen success=$success elapsedRealtime=$now"
+            Log.w(TAG, failMsg)
+            com.remmi.browser.util.DebugLogManager.log(failMsg)
+          }
+        }
 
         sessionCallbacks[tabId]?.onLoadingChange(false)
         sessionCallbacks[tabId]?.onProgressChange(100)
@@ -802,6 +894,14 @@ class GeckoEngineManager private constructor(private val context: Context) {
     val gen = navGenerations[tabId] ?: 0L
     val now = android.os.SystemClock.elapsedRealtime()
 
+    val inFlightRecovery = activeRecoveries.remove(tabId)
+    if (inFlightRecovery != null) {
+      inFlightRecovery.timeoutRunnable?.let { mainHandler.removeCallbacks(it) }
+      val crashInFlightMsg = "[FORENSIC][CONTENT_RECOVERY_CRASH_IN_FLIGHT] tabId=$tabId session=$sessId view=$viewId url=${inFlightRecovery.targetUrl} gen=${inFlightRecovery.generation} stage=${inFlightRecovery.stage} termination=$terminationType elapsedRealtime=$now"
+      Log.e(TAG, crashInFlightMsg)
+      com.remmi.browser.util.DebugLogManager.log(crashInFlightMsg)
+    }
+
     // 1. Verify active session ownership (only recover if this session is the active session for the tab)
     val currentActive = activeSessions[tabId]
     if (currentActive == null || currentActive !== session) {
@@ -881,9 +981,31 @@ class GeckoEngineManager private constructor(private val context: Context) {
       } else {
         session.loadUri(currUrl)
       }
-      val succMsg = "[FORENSIC][CONTENT_RECOVERY_SUCCESS] tabId=$tabId session=$sessId view=$viewId url=$currUrl gen=$gen elapsedRealtime=${android.os.SystemClock.elapsedRealtime()}"
-      Log.i(TAG, succMsg)
-      com.remmi.browser.util.DebugLogManager.log(succMsg)
+
+      val recovery = ActiveRecovery(
+        tabId = tabId,
+        session = session,
+        targetUrl = currUrl,
+        generation = gen,
+        startTime = now,
+        stage = RecoveryStage.DISPATCHED,
+      )
+      val timeoutRunnable = Runnable {
+        val current = activeRecoveries[tabId]
+        if (current != null && current.generation == gen && current.stage != RecoveryStage.SUCCESS && current.stage != RecoveryStage.FAILED) {
+          activeRecoveries.remove(tabId)
+          val toMsg = "[FORENSIC][CONTENT_RECOVERY_TIMEOUT] tabId=$tabId session=$sessId view=$viewId url=$currUrl gen=$gen stage=${current.stage} elapsedRealtime=${android.os.SystemClock.elapsedRealtime()}"
+          Log.w(TAG, toMsg)
+          com.remmi.browser.util.DebugLogManager.log(toMsg)
+        }
+      }
+      recovery.timeoutRunnable = timeoutRunnable
+      mainHandler.postDelayed(timeoutRunnable, 15000L)
+      activeRecoveries[tabId] = recovery
+
+      val dispMsg = "[FORENSIC][CONTENT_RECOVERY_DISPATCHED] tabId=$tabId session=$sessId view=$viewId url=$currUrl gen=$gen elapsedRealtime=${android.os.SystemClock.elapsedRealtime()}"
+      Log.i(TAG, dispMsg)
+      com.remmi.browser.util.DebugLogManager.log(dispMsg)
     } catch (e: Exception) {
       val failMsg = "[FORENSIC][CONTENT_RECOVERY_FAILED] tabId=$tabId session=$sessId view=$viewId url=$currUrl gen=$gen error=${e.message} elapsedRealtime=${android.os.SystemClock.elapsedRealtime()}"
       Log.e(TAG, failMsg, e)
@@ -984,9 +1106,30 @@ class GeckoEngineManager private constructor(private val context: Context) {
       // clear the pending recovery state only after dispatch is accepted
       pendingContentRecoveries.remove(tabId)
 
-      val succMsg = "[FORENSIC][CONTENT_RECOVERY_SUCCESS] tabId=$tabId session=$sessId view=$viewId url=$targetUrl gen=${pendingRecovery.generation} elapsedRealtime=${android.os.SystemClock.elapsedRealtime()}"
-      Log.i(TAG, succMsg)
-      com.remmi.browser.util.DebugLogManager.log(succMsg)
+      val recovery = ActiveRecovery(
+        tabId = tabId,
+        session = session,
+        targetUrl = targetUrl,
+        generation = pendingRecovery.generation,
+        startTime = now,
+        stage = RecoveryStage.DISPATCHED,
+      )
+      val timeoutRunnable = Runnable {
+        val current = activeRecoveries[tabId]
+        if (current != null && current.generation == pendingRecovery.generation && current.stage != RecoveryStage.SUCCESS && current.stage != RecoveryStage.FAILED) {
+          activeRecoveries.remove(tabId)
+          val toMsg = "[FORENSIC][CONTENT_RECOVERY_TIMEOUT] tabId=$tabId session=$sessId view=$viewId url=$targetUrl gen=${pendingRecovery.generation} stage=${current.stage} elapsedRealtime=${android.os.SystemClock.elapsedRealtime()}"
+          Log.w(TAG, toMsg)
+          com.remmi.browser.util.DebugLogManager.log(toMsg)
+        }
+      }
+      recovery.timeoutRunnable = timeoutRunnable
+      mainHandler.postDelayed(timeoutRunnable, 15000L)
+      activeRecoveries[tabId] = recovery
+
+      val dispMsg = "[FORENSIC][CONTENT_RECOVERY_DISPATCHED] tabId=$tabId session=$sessId view=$viewId url=$targetUrl gen=${pendingRecovery.generation} elapsedRealtime=${android.os.SystemClock.elapsedRealtime()}"
+      Log.i(TAG, dispMsg)
+      com.remmi.browser.util.DebugLogManager.log(dispMsg)
     } catch (e: Exception) {
       val failMsg = "[FORENSIC][CONTENT_RECOVERY_FAILED] tabId=$tabId session=$sessId view=$viewId url=$targetUrl gen=${pendingRecovery.generation} error=${e.message} elapsedRealtime=${android.os.SystemClock.elapsedRealtime()}"
       Log.e(TAG, failMsg, e)
@@ -1210,6 +1353,14 @@ class GeckoEngineManager private constructor(private val context: Context) {
     val sessId = session?.let { "0x" + Integer.toHexString(System.identityHashCode(it)) } ?: "none"
     val threadName = Thread.currentThread().name
 
+    val activeRecovery = activeRecoveries.remove(tabId)
+    if (activeRecovery != null) {
+      activeRecovery.timeoutRunnable?.let { mainHandler.removeCallbacks(it) }
+      val superMsg = "[FORENSIC][CONTENT_RECOVERY_SUPERSEDED] tabId=$tabId session=$sessId url=${activeRecovery.targetUrl} newUrl=$targetUrl gen=${activeRecovery.generation} newGen=$gen elapsedRealtime=${android.os.SystemClock.elapsedRealtime()}"
+      Log.i(TAG, superMsg)
+      com.remmi.browser.util.DebugLogManager.log(superMsg)
+    }
+
     if (_initState.value == GeckoInitState.NOT_STARTED) {
       Log.d(TAG, "[GECKO] loadUrl requesting init on tabId=$tabId")
       initializeRuntimeAsync()
@@ -1284,6 +1435,13 @@ class GeckoEngineManager private constructor(private val context: Context) {
       lastDispatchedUrls.remove(tabId)
       lastRecoveredGenerations.remove(tabId)
       pendingContentRecoveries.remove(tabId)
+      val activeRecovery = activeRecoveries.remove(tabId)
+      if (activeRecovery != null) {
+        activeRecovery.timeoutRunnable?.let { mainHandler.removeCallbacks(it) }
+        val superMsg = "[FORENSIC][CONTENT_RECOVERY_SUPERSEDED] tabId=$tabId url=${activeRecovery.targetUrl} reason=reload elapsedRealtime=${android.os.SystemClock.elapsedRealtime()}"
+        Log.i(TAG, superMsg)
+        com.remmi.browser.util.DebugLogManager.log(superMsg)
+      }
       session.reload()
     }
   }
@@ -1292,6 +1450,13 @@ class GeckoEngineManager private constructor(private val context: Context) {
     onMainSession(tabId, "RESET_TO_NEW_TAB") { session ->
       Log.i(TAG, "[FORENSIC] NAV_NEW_TAB_TRANSITION tabId=$tabId")
       pendingContentRecoveries.remove(tabId)
+      val activeRecovery = activeRecoveries.remove(tabId)
+      if (activeRecovery != null) {
+        activeRecovery.timeoutRunnable?.let { mainHandler.removeCallbacks(it) }
+        val superMsg = "[FORENSIC][CONTENT_RECOVERY_SUPERSEDED] tabId=$tabId url=${activeRecovery.targetUrl} reason=reset_to_new_tab elapsedRealtime=${android.os.SystemClock.elapsedRealtime()}"
+        Log.i(TAG, superMsg)
+        com.remmi.browser.util.DebugLogManager.log(superMsg)
+      }
       session.load(GeckoSession.Loader().uri("about:blank").flags(GeckoSession.LOAD_FLAGS_REPLACE_HISTORY))
     }
   }
@@ -1379,7 +1544,10 @@ class GeckoEngineManager private constructor(private val context: Context) {
     _viewAttachmentStates.remove(tabId)
     pendingNavigations.remove(tabId)
     pendingContentRecoveries.remove(tabId)
+    val activeRecovery = activeRecoveries.remove(tabId)
+    activeRecovery?.timeoutRunnable?.let { mainHandler.removeCallbacks(it) }
     lastDispatchedUrls.remove(tabId)
+    lastObservedUrls.remove(tabId)
     dispatchedNavigationsHistory.remove(tabId)
     navGenerations.remove(tabId)
     lastRecoveredGenerations.remove(tabId)
@@ -1412,7 +1580,10 @@ class GeckoEngineManager private constructor(private val context: Context) {
     _viewAttachmentStates.clear()
     pendingNavigations.clear()
     pendingContentRecoveries.clear()
+    activeRecoveries.values.forEach { it.timeoutRunnable?.let { r -> mainHandler.removeCallbacks(r) } }
+    activeRecoveries.clear()
     lastDispatchedUrls.clear()
+    lastObservedUrls.clear()
     dispatchedNavigationsHistory.clear()
     navGenerations.clear()
     lastRecoveredGenerations.clear()
@@ -1446,7 +1617,11 @@ class GeckoEngineManager private constructor(private val context: Context) {
       attachedViews.clear()
       _viewAttachmentStates.clear()
       pendingNavigations.clear()
+      pendingContentRecoveries.clear()
+      activeRecoveries.values.forEach { it.timeoutRunnable?.let { r -> mainHandler.removeCallbacks(r) } }
+      activeRecoveries.clear()
       lastDispatchedUrls.clear()
+      lastObservedUrls.clear()
       dispatchedNavigationsHistory.clear()
       navGenerations.clear()
       lastRecoveredGenerations.clear()

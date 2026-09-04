@@ -6,6 +6,7 @@ import androidx.test.core.app.ApplicationProvider
 import com.remmi.browser.security.ContainerType
 import com.remmi.browser.security.PrivacyProfile
 import com.remmi.browser.security.SecurityLevel
+import com.remmi.browser.util.DebugLogManager
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.*
@@ -40,6 +41,8 @@ class ContentProcessRecoveryTests {
   fun setUp() {
     context = ApplicationProvider.getApplicationContext<Application>()
     org.mozilla.gecko.GeckoAppShell.setApplicationContext(context)
+    DebugLogManager.init(context)
+    DebugLogManager.clear()
     manager = GeckoEngineManager.getInstance(context)
     tabManager = TabManager.getInstance()
     tabManager.closeAllTabs()
@@ -552,5 +555,289 @@ class ContentProcessRecoveryTests {
     // 3. Mismatched tag -> logs warning without crashing
     geckoView.tag = "different_tab_id"
     manager.checkViewInvariants(tabId, "TEST_MISMATCH")
+  }
+
+  /**
+   * STEP 8 Recovery Success Semantics Tests
+   */
+
+  @Test
+  fun testRecoveryDispatch_emitsDispatchedNotSuccess() = runBlocking {
+    val tab = tabManager.createTab("about:blank")
+    val tabId = tab.id
+    val settings = GeckoSessionSettings.Builder().usePrivateMode(true).build()
+    val session = GeckoSession(settings)
+    manager.setSessionForTesting(tabId, session)
+
+    val geckoView = GeckoView(context).apply { tag = tabId }
+    manager.attachView(tabId = tabId, geckoView = geckoView, profile = PrivacyProfile.SHIELD, isDesktopMode = false, callbacks = dummyCallbacks)
+
+    val testUrl = "https://example.com/item"
+    manager.loadUrl(tabId, testUrl)
+
+    DebugLogManager.clear()
+
+    // Trigger onKill
+    session.contentDelegate?.onKill(session)
+
+    assertTrue("Active recovery must be registered", manager.hasActiveRecovery(tabId))
+    val recovery = manager.getActiveRecovery(tabId)
+    assertNotNull(recovery)
+    assertEquals(GeckoEngineManager.RecoveryStage.DISPATCHED, recovery?.stage)
+    assertEquals(testUrl, recovery?.targetUrl)
+
+    val logs = DebugLogManager.getCurrentSessionEvents().joinToString("\n")
+    assertTrue("Logs must contain CONTENT_RECOVERY_DISPATCHED", logs.contains("[CONTENT_RECOVERY_DISPATCHED]"))
+    assertFalse("Logs must NOT contain premature CONTENT_RECOVERY_SUCCESS", logs.contains("[CONTENT_RECOVERY_SUCCESS]"))
+    assertFalse("Logs must NOT contain premature CONTENT_RECOVERY_NAV_SUCCESS", logs.contains("[CONTENT_RECOVERY_NAV_SUCCESS]"))
+  }
+
+  @Test
+  fun testRecovery_aboutBlankDoesNotCompleteRecovery() = runBlocking {
+    val tab = tabManager.createTab("about:blank")
+    val tabId = tab.id
+    val settings = GeckoSessionSettings.Builder().usePrivateMode(true).build()
+    val session = GeckoSession(settings)
+    manager.setSessionForTesting(tabId, session)
+
+    val geckoView = GeckoView(context).apply { tag = tabId }
+    manager.attachView(tabId = tabId, geckoView = geckoView, profile = PrivacyProfile.SHIELD, isDesktopMode = false, callbacks = dummyCallbacks)
+
+    val testUrl = "https://example.com/target"
+    manager.loadUrl(tabId, testUrl)
+
+    // Trigger onKill -> DISPATCHED
+    session.contentDelegate?.onKill(session)
+    assertTrue(manager.hasActiveRecovery(tabId))
+
+    DebugLogManager.clear()
+
+    // Simulate Gecko's internal docshell reset to about:blank
+    session.navigationDelegate?.onLocationChange(session, "about:blank", mutableListOf(), false)
+    session.progressDelegate?.onPageStop(session, true)
+
+    // Verify about:blank did NOT complete or dismiss the recovery
+    assertTrue("Active recovery must persist across internal about:blank stop", manager.hasActiveRecovery(tabId))
+    assertEquals(GeckoEngineManager.RecoveryStage.DISPATCHED, manager.getActiveRecovery(tabId)?.stage)
+
+    val logs = DebugLogManager.getCurrentSessionEvents().joinToString("\n")
+    assertFalse("about:blank must NOT trigger CONTENT_RECOVERY_NAV_SUCCESS", logs.contains("[CONTENT_RECOVERY_NAV_SUCCESS]"))
+  }
+
+  @Test
+  fun testRecovery_matchingTargetUrlAndPageStopSuccess_completesRecovery() = runBlocking {
+    val tab = tabManager.createTab("about:blank")
+    val tabId = tab.id
+    val settings = GeckoSessionSettings.Builder().usePrivateMode(true).build()
+    val session = GeckoSession(settings)
+    manager.setSessionForTesting(tabId, session)
+
+    val geckoView = GeckoView(context).apply { tag = tabId }
+    manager.attachView(tabId = tabId, geckoView = geckoView, profile = PrivacyProfile.SHIELD, isDesktopMode = false, callbacks = dummyCallbacks)
+
+    val testUrl = "https://example.com/final_target"
+    manager.loadUrl(tabId, testUrl)
+
+    // Trigger onKill -> DISPATCHED
+    session.contentDelegate?.onKill(session)
+    assertTrue(manager.hasActiveRecovery(tabId))
+
+    // 1. onLocationChange matching target URL -> transitions to NAV_IN_FLIGHT
+    session.navigationDelegate?.onLocationChange(session, testUrl, mutableListOf(), false)
+    assertEquals(GeckoEngineManager.RecoveryStage.NAV_IN_FLIGHT, manager.getActiveRecovery(tabId)?.stage)
+
+    // 2. onPageStop with success=true -> transitions to SUCCESS and clears
+    session.progressDelegate?.onPageStop(session, true)
+    assertFalse("Active recovery must be removed upon true completion", manager.hasActiveRecovery(tabId))
+
+    val logs = DebugLogManager.getCurrentSessionEvents().joinToString("\n")
+    assertTrue("Logs must contain CONTENT_RECOVERY_NAV_IN_FLIGHT", logs.contains("[CONTENT_RECOVERY_NAV_IN_FLIGHT]"))
+    assertTrue("Logs must contain CONTENT_RECOVERY_NAV_SUCCESS", logs.contains("[CONTENT_RECOVERY_NAV_SUCCESS]"))
+  }
+
+  @Test
+  fun testRecovery_pageStopFailure_emitsNavFailedAndClears() = runBlocking {
+    val tab = tabManager.createTab("about:blank")
+    val tabId = tab.id
+    val settings = GeckoSessionSettings.Builder().usePrivateMode(true).build()
+    val session = GeckoSession(settings)
+    manager.setSessionForTesting(tabId, session)
+
+    val geckoView = GeckoView(context).apply { tag = tabId }
+    manager.attachView(tabId = tabId, geckoView = geckoView, profile = PrivacyProfile.SHIELD, isDesktopMode = false, callbacks = dummyCallbacks)
+
+    val testUrl = "https://example.com/fail_target"
+    manager.loadUrl(tabId, testUrl)
+
+    // Trigger onKill -> DISPATCHED
+    session.contentDelegate?.onKill(session)
+    assertTrue(manager.hasActiveRecovery(tabId))
+
+    // onPageStop with success=false
+    session.progressDelegate?.onPageStop(session, false)
+
+    assertFalse("Active recovery must be cleared upon navigation failure", manager.hasActiveRecovery(tabId))
+    val logs = DebugLogManager.getCurrentSessionEvents().joinToString("\n")
+    assertTrue("Logs must contain CONTENT_RECOVERY_NAV_FAILED", logs.contains("[CONTENT_RECOVERY_NAV_FAILED]"))
+    assertFalse("Logs must NOT contain CONTENT_RECOVERY_NAV_SUCCESS", logs.contains("[CONTENT_RECOVERY_NAV_SUCCESS]"))
+  }
+
+  @Test
+  fun testRecovery_secondKillDuringRecovery_emitsCrashInFlight() = runBlocking {
+    val tab = tabManager.createTab("about:blank")
+    val tabId = tab.id
+    val settings = GeckoSessionSettings.Builder().usePrivateMode(true).build()
+    val session = GeckoSession(settings)
+    manager.setSessionForTesting(tabId, session)
+
+    val geckoView = GeckoView(context).apply { tag = tabId }
+    manager.attachView(tabId = tabId, geckoView = geckoView, profile = PrivacyProfile.SHIELD, isDesktopMode = false, callbacks = dummyCallbacks)
+
+    val testUrl = "https://example.com/crash_test"
+    manager.loadUrl(tabId, testUrl)
+
+    // First kill -> recovery dispatched
+    session.contentDelegate?.onKill(session)
+    assertTrue(manager.hasActiveRecovery(tabId))
+
+    // Second kill while recovery is in flight!
+    session.contentDelegate?.onKill(session)
+
+    val logs = DebugLogManager.getCurrentSessionEvents().joinToString("\n")
+    assertTrue("Logs must record CONTENT_RECOVERY_CRASH_IN_FLIGHT", logs.contains("[CONTENT_RECOVERY_CRASH_IN_FLIGHT]"))
+    assertTrue("Logs must suppress recovery loop (max_attempts_exceeded)", logs.contains("reason=max_attempts_exceeded"))
+    assertFalse("Logs must NOT claim NAV_SUCCESS", logs.contains("[CONTENT_RECOVERY_NAV_SUCCESS]"))
+    assertFalse("Active recovery must be cleared after crash in-flight", manager.hasActiveRecovery(tabId))
+  }
+
+  @Test
+  fun testRecovery_timeout_emitsTimeoutAndClears() = runBlocking {
+    val tab = tabManager.createTab("about:blank")
+    val tabId = tab.id
+    val settings = GeckoSessionSettings.Builder().usePrivateMode(true).build()
+    val session = GeckoSession(settings)
+    manager.setSessionForTesting(tabId, session)
+
+    val geckoView = GeckoView(context).apply { tag = tabId }
+    manager.attachView(tabId = tabId, geckoView = geckoView, profile = PrivacyProfile.SHIELD, isDesktopMode = false, callbacks = dummyCallbacks)
+
+    val testUrl = "https://example.com/timeout_test"
+    manager.loadUrl(tabId, testUrl)
+
+    // Trigger onKill -> DISPATCHED
+    session.contentDelegate?.onKill(session)
+    assertTrue(manager.hasActiveRecovery(tabId))
+
+    // Fire timeout
+    manager.triggerRecoveryTimeoutForTest(tabId)
+
+    assertFalse("Recovery state must be cleared on timeout", manager.hasActiveRecovery(tabId))
+    val logs = DebugLogManager.getCurrentSessionEvents().joinToString("\n")
+    assertTrue("Logs must contain CONTENT_RECOVERY_TIMEOUT", logs.contains("[CONTENT_RECOVERY_TIMEOUT]"))
+    assertFalse("Logs must NOT contain CONTENT_RECOVERY_NAV_SUCCESS", logs.contains("[CONTENT_RECOVERY_NAV_SUCCESS]"))
+  }
+
+  @Test
+  fun testRecovery_userNavigation_supersedesActiveRecovery() = runBlocking {
+    val tab = tabManager.createTab("about:blank")
+    val tabId = tab.id
+    val settings = GeckoSessionSettings.Builder().usePrivateMode(true).build()
+    val session = GeckoSession(settings)
+    manager.setSessionForTesting(tabId, session)
+
+    val geckoView = GeckoView(context).apply { tag = tabId }
+    manager.attachView(tabId = tabId, geckoView = geckoView, profile = PrivacyProfile.SHIELD, isDesktopMode = false, callbacks = dummyCallbacks)
+
+    val testUrl = "https://example.com/first"
+    manager.loadUrl(tabId, testUrl)
+
+    // Trigger onKill -> DISPATCHED
+    session.contentDelegate?.onKill(session)
+    assertTrue(manager.hasActiveRecovery(tabId))
+
+    // User navigates to a new URL
+    val newUrl = "https://example.com/second"
+    manager.loadUrl(tabId, newUrl)
+
+    assertFalse("Active recovery must be cancelled when user navigates", manager.hasActiveRecovery(tabId))
+    val logs = DebugLogManager.getCurrentSessionEvents().joinToString("\n")
+    assertTrue("Logs must record CONTENT_RECOVERY_SUPERSEDED", logs.contains("[CONTENT_RECOVERY_SUPERSEDED]"))
+
+    // If stale pageStop callback from old target arrives, assert it doesn't emit recovery success
+    session.progressDelegate?.onPageStop(session, true)
+    val afterLogs = DebugLogManager.getCurrentSessionEvents().joinToString("\n")
+    assertFalse("Stale callback must NOT emit CONTENT_RECOVERY_NAV_SUCCESS", afterLogs.contains("[CONTENT_RECOVERY_NAV_SUCCESS]"))
+  }
+
+  @Test
+  fun testRecovery_staleGenerationCallbackCannotCompleteRecovery() = runBlocking {
+    val tab = tabManager.createTab("about:blank")
+    val tabId = tab.id
+    val settings = GeckoSessionSettings.Builder().usePrivateMode(true).build()
+    val session = GeckoSession(settings)
+    manager.setSessionForTesting(tabId, session)
+
+    val geckoView = GeckoView(context).apply { tag = tabId }
+    manager.attachView(tabId = tabId, geckoView = geckoView, profile = PrivacyProfile.SHIELD, isDesktopMode = false, callbacks = dummyCallbacks)
+
+    val testUrl = "https://example.com/target"
+    manager.loadUrl(tabId, testUrl)
+
+    // Trigger onKill -> DISPATCHED with gen = 1
+    session.contentDelegate?.onKill(session)
+    val active = manager.getActiveRecovery(tabId)
+    assertNotNull(active)
+
+    // Stale session or mismatched session callback
+    val otherSession = GeckoSession(settings)
+    otherSession.progressDelegate?.onPageStop(otherSession, true)
+
+    assertTrue("Active recovery must remain active after mismatched session event", manager.hasActiveRecovery(tabId))
+
+    val logs = DebugLogManager.getCurrentSessionEvents().joinToString("\n")
+    assertFalse("Mismatched session must NOT complete recovery", logs.contains("[CONTENT_RECOVERY_NAV_SUCCESS]"))
+  }
+
+  @Test
+  fun testRecovery_detachedRecoveryPath_defersAndResumesOnAttach() = runBlocking {
+    val tab = tabManager.createTab("about:blank")
+    val tabId = tab.id
+    val settings = GeckoSessionSettings.Builder().usePrivateMode(true).build()
+    val session = GeckoSession(settings)
+    manager.setSessionForTesting(tabId, session)
+
+    val geckoView = GeckoView(context).apply { tag = tabId }
+    manager.attachView(tabId = tabId, geckoView = geckoView, profile = PrivacyProfile.SHIELD, isDesktopMode = false, callbacks = dummyCallbacks)
+
+    val testUrl = "https://example.com/detached"
+    manager.loadUrl(tabId, testUrl)
+
+    // Detach view and simulate kill while detached
+    manager.detachView(tabId, geckoView)
+    session.contentDelegate?.onKill(session)
+
+    assertTrue("Detached kill must defer recovery", manager.hasPendingContentRecovery(tabId))
+    assertFalse("Active recovery must not be dispatched while detached", manager.hasActiveRecovery(tabId))
+
+    val defLogs = DebugLogManager.getCurrentSessionEvents().joinToString("\n")
+    assertTrue("Logs must contain CONTENT_RECOVERY_DEFERRED", defLogs.contains("[CONTENT_RECOVERY_DEFERRED]"))
+
+    // Attach view to foreground the tab
+    manager.attachView(tabId = tabId, geckoView = geckoView, profile = PrivacyProfile.SHIELD, isDesktopMode = false, callbacks = dummyCallbacks)
+
+    assertFalse("Pending content recovery should be cleared after resume dispatch", manager.hasPendingContentRecovery(tabId))
+    assertTrue("Active recovery should now be DISPATCHED", manager.hasActiveRecovery(tabId))
+
+    val resumeLogs = DebugLogManager.getCurrentSessionEvents().joinToString("\n")
+    assertTrue("Logs must contain CONTENT_RECOVERY_RESUME", resumeLogs.contains("[CONTENT_RECOVERY_RESUME]"))
+    assertTrue("Logs must contain CONTENT_RECOVERY_DISPATCHED", resumeLogs.contains("[CONTENT_RECOVERY_DISPATCHED]"))
+
+    // Now complete recovery navigation
+    session.navigationDelegate?.onLocationChange(session, testUrl, mutableListOf(), false)
+    session.progressDelegate?.onPageStop(session, true)
+
+    assertFalse("Active recovery must be finished", manager.hasActiveRecovery(tabId))
+    val finalLogs = DebugLogManager.getCurrentSessionEvents().joinToString("\n")
+    assertTrue("Logs must contain CONTENT_RECOVERY_NAV_SUCCESS", finalLogs.contains("[CONTENT_RECOVERY_NAV_SUCCESS]"))
   }
 }
