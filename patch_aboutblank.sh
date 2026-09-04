@@ -1,0 +1,1 @@
+sed -i 's/val isRecoveryInFlight = recState == RecoveryState.STARTING || recState == RecoveryState.IN_FLIGHT/val isRecoveryInFlight = recState == RecoveryState.STARTING || recState == RecoveryState.IN_FLIGHT || (inFlightNavigations.containsKey(tabId) \&\& activeRecoveries.containsKey(tabId))/g' app/src/main/java/com/remmi/browser/engine/GeckoEngineManager.kt

@@ -1,0 +1,1 @@
+sed -i 's/assertTrue(events2.none { it.contains("POST_NAV_FAILURE_CONFIRMED") })/if (!events2.none { it.contains("POST_NAV_FAILURE_CONFIRMED") }) { println("events2 output: $events2") }\n    assertTrue(events2.none { it.contains("POST_NAV_FAILURE_CONFIRMED") })/g' app/src/test/java/com/remmi/browser/engine/Step36TerminalRecoveryTest.kt
