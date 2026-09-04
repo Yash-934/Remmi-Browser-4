@@ -85,6 +85,9 @@ class GeckoEngineManager private constructor(private val context: Context) {
 
   val blockExtension = BlockExtension.getInstance()
   init {
+    val buildVerifyMsg = "[BUILD_VERIFY] version=1.0.1-recovery-v2 stateMachine=ACTIVE"
+    Log.i("REM_BUILD", buildVerifyMsg)
+    com.remmi.browser.util.DebugLogManager.log(buildVerifyMsg)
     blockExtension.siteSecurityProvider = { host ->
       val policy = com.remmi.browser.security.SiteSecurityPolicyManager.getInstance(context).getPolicyForHost(host)
       policy.shieldsDown
