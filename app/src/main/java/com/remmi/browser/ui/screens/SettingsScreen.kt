@@ -36,6 +36,8 @@ import androidx.compose.material3.CircularProgressIndicator
 import kotlinx.coroutines.launch
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.ui.res.painterResource
+import com.remmi.browser.R
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Check
@@ -167,6 +169,7 @@ fun SettingsScreen(
   onBack: () -> Unit,
   onOpenPasswords: () -> Unit = {},
   onOpenDebugLogs: () -> Unit = {},
+  onOpenUrl: (String) -> Unit = {},
 ) {
   val context = LocalContext.current
   val activity = context as? Activity
@@ -671,6 +674,7 @@ fun SettingsScreen(
               cardBorder = cardBorder,
               textPrimary = textPrimaryColor,
               textSecondary = textSecondaryColor,
+              onOpenUrl = onOpenUrl,
               modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
@@ -1631,6 +1635,7 @@ private fun PrivacySecuritySubScreen(
   cardBorder: Color,
   textPrimary: Color,
   textSecondary: Color,
+  onOpenUrl: (String) -> Unit = {},
   modifier: Modifier = Modifier
 ) {
   val greenTint = if (isLight) Color(0xFF16A34A) else Color(0xFF4ADE80)
@@ -1688,6 +1693,57 @@ private fun PrivacySecuritySubScreen(
             Text("GHOST MODE", color = if (isGhost) ghostColor else textPrimary, fontWeight = FontWeight.Bold, fontSize = 13.sp)
             Text("Tor 3-Hop Onion", color = textSecondary, fontSize = 10.5.sp)
           }
+        }
+      }
+    }
+
+    item {
+      val ghostColor = if (isLight) Color(0xFF7C3AED) else Color(0xFFA78BFA)
+      Card(
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = cardBg),
+        modifier = Modifier
+          .fillMaxWidth()
+          .border(0.8.dp, cardBorder, RoundedCornerShape(18.dp))
+          .clickable { onOpenUrl("https://check.torproject.org") }
+      ) {
+        Row(
+          modifier = Modifier.padding(14.dp),
+          verticalAlignment = Alignment.CenterVertically
+        ) {
+          Box(
+            modifier = Modifier
+              .size(40.dp)
+              .background(if (isLight) Color(0xFFF3E8FF) else Color(0xFF2E1065), RoundedCornerShape(10.dp)),
+            contentAlignment = Alignment.Center
+          ) {
+            Icon(
+              painter = painterResource(R.drawable.ic_tor),
+              contentDescription = "Verify Tor",
+              tint = ghostColor,
+              modifier = Modifier.size(22.dp)
+            )
+          }
+          Spacer(modifier = Modifier.width(14.dp))
+          Column(modifier = Modifier.weight(1f)) {
+            Text(
+              "Verify on check.torproject.org",
+              color = textPrimary,
+              fontWeight = FontWeight.SemiBold,
+              fontSize = 13.5.sp
+            )
+            Text(
+              "Test Tor exit routing, onion encryption, and check if IP is anonymous.",
+              color = textSecondary,
+              fontSize = 11.sp
+            )
+          }
+          Icon(
+            imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+            contentDescription = null,
+            tint = textSecondary,
+            modifier = Modifier.size(18.dp)
+          )
         }
       }
     }

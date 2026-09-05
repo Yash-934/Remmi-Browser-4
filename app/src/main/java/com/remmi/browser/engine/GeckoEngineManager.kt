@@ -127,6 +127,17 @@ class GeckoEngineManager private constructor(private val context: Context) {
   fun getSession(tabId: String): GeckoSession? = activeSessions[tabId]
   fun getSessionForTest(tabId: String): GeckoSession? = activeSessions[tabId]
   fun getAttachedViewForTest(tabId: String): org.mozilla.geckoview.GeckoView? = attachedViews[tabId]
+
+  fun captureTabThumbnail(tabId: String) {
+    try {
+      val view = attachedViews[tabId]
+      if (view != null && view.session?.isOpen == true) {
+        TabThumbnailManager.getInstance(context).captureGeckoView(tabId, view)
+      }
+    } catch (e: Exception) {
+      Log.d(TAG, "captureTabThumbnail notice on tab $tabId: ${e.message}")
+    }
+  }
   private val sessionCallbacks = mutableMapOf<String, GeckoTabCallbacks>()
   private val sessionNavStates = mutableMapOf<String, Pair<Boolean, Boolean>>()
   private val mainHandler = Handler(Looper.getMainLooper())

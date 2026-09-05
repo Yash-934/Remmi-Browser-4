@@ -322,17 +322,7 @@ class DownloadHandler(private val context: Context) {
 
       notificationManager.notify(notifId, completionNotif)
 
-      val finalInfo = DownloadProgressInfo(
-        downloadId = downloadId,
-        fileName = fileName,
-        url = url,
-        bytesDownloaded = downloadedBytes,
-        totalBytes = downloadedBytes,
-        isGhost = isGhost,
-        status = "COMPLETED",
-        filePath = targetUri.toString()
-      )
-      _activeDownloads.value = _activeDownloads.value + (downloadId to finalInfo)
+      _activeDownloads.value = _activeDownloads.value - downloadId
       activeJobs.remove(downloadId)
 
       db.downloadDao().insert(
@@ -343,7 +333,8 @@ class DownloadHandler(private val context: Context) {
           mimeType = mime,
           fileSize = downloadedBytes,
           status = "COMPLETED",
-          filePath = targetUri.toString()
+          filePath = targetUri.toString(),
+          timestamp = System.currentTimeMillis()
         )
       )
 
@@ -376,17 +367,7 @@ class DownloadHandler(private val context: Context) {
 
       notificationManager.notify(notifId, errorNotif)
 
-      val failedInfo = DownloadProgressInfo(
-        downloadId = downloadId,
-        fileName = fileName,
-        url = url,
-        bytesDownloaded = 0L,
-        totalBytes = contentLength,
-        isGhost = isGhost,
-        status = "FAILED",
-        filePath = ""
-      )
-      _activeDownloads.value = _activeDownloads.value + (downloadId to failedInfo)
+      _activeDownloads.value = _activeDownloads.value - downloadId
 
       db.downloadDao().insert(
         DownloadItem(
@@ -396,7 +377,8 @@ class DownloadHandler(private val context: Context) {
           mimeType = mime,
           fileSize = 0L,
           status = "FAILED",
-          filePath = ""
+          filePath = "",
+          timestamp = System.currentTimeMillis()
         )
       )
 

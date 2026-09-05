@@ -71,6 +71,9 @@ fun DownloadsDrawer(
   val dateFormatter = remember { SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()) }
   val accentColor = ThemeCyber.colors.primary
 
+  val displayList = remember(downloadsList) {
+    downloadsList.distinctBy { if (it.downloadId != 0L) it.downloadId else it.fileName + "_" + it.timestamp }
+  }
   val totalActiveCount = activeDownloads.values.count { it.status == "DOWNLOADING" }
 
   Column(
@@ -93,7 +96,7 @@ fun DownloadsDrawer(
         )
         Spacer(modifier = Modifier.width(8.dp))
         Text(
-          text = if (totalActiveCount > 0) "DOWNLOADS (${downloadsList.size} • $totalActiveCount active)" else "DOWNLOADS (${downloadsList.size})",
+          text = if (totalActiveCount > 0) "DOWNLOADS (${displayList.size} • $totalActiveCount active)" else "DOWNLOADS (${displayList.size})",
           color = accentColor,
           fontFamily = CyberMonoFamily,
           fontSize = 15.sp,
@@ -102,7 +105,7 @@ fun DownloadsDrawer(
       }
 
       Row {
-        if (downloadsList.isNotEmpty()) {
+        if (displayList.isNotEmpty()) {
           IconButton(
             onClick = onClearAll,
             modifier = Modifier
@@ -139,7 +142,7 @@ fun DownloadsDrawer(
 
     Spacer(modifier = Modifier.height(14.dp))
 
-    if (downloadsList.isEmpty() && activeDownloads.isEmpty()) {
+    if (displayList.isEmpty() && activeDownloads.isEmpty()) {
       Box(
         modifier = Modifier
           .fillMaxWidth()
@@ -167,9 +170,9 @@ fun DownloadsDrawer(
         modifier = Modifier.weight(1f),
         verticalArrangement = Arrangement.spacedBy(8.dp),
       ) {
-        items(downloadsList) { item ->
+        items(displayList, key = { it.downloadId }) { item ->
           val activeProgress = activeDownloads[item.downloadId]
-          val isCurrentlyDownloading = item.status == "DOWNLOADING" || (activeProgress != null && activeProgress.status == "DOWNLOADING")
+          val isCurrentlyDownloading = (item.status == "DOWNLOADING" && activeProgress != null) || (activeProgress != null && activeProgress.status == "DOWNLOADING")
 
           DownloadItemRow(
             item = item,

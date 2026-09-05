@@ -35,6 +35,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.ui.res.painterResource
+import com.remmi.browser.R
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Code
@@ -425,6 +427,9 @@ fun BrowserScreen(
               android.widget.Toast.LENGTH_SHORT
             ).show()
           }
+          if (activeTab.url.isBlank() || activeTab.url == "about:blank" || activeTab.url == "remmi://newtab" || activeTab.url == "about:home") {
+            geckoEngine.loadUrl(activeTab.id, "https://check.torproject.org")
+          }
         }.onFailure { err ->
           isWaitingForTor = false
           withContext(Dispatchers.Main) {
@@ -454,6 +459,7 @@ fun BrowserScreen(
   val handleOpenGhostTab: (String?) -> Unit = { url ->
     scope.launch {
       isWaitingForTor = true
+      val targetDestination = if (!url.isNullOrBlank() && url != "about:blank") url else "https://check.torproject.org"
       // Create tab as GHOST with blank url to prevent routing leaks before Tor is ready
       tabManager.openTab(url = "about:blank", profile = PrivacyProfile.GHOST)
       val newTabId = tabManager.tabs.value.last().id
@@ -466,12 +472,7 @@ fun BrowserScreen(
             android.widget.Toast.LENGTH_SHORT
           ).show()
         }
-        if (com.remmi.browser.security.CurrentTorRoute.isReady) {
-            val sanitized = url ?: "about:blank"
-            if (sanitized != "about:blank") {
-                geckoEngine.loadUrl(newTabId, sanitized)
-            }
-        }
+        geckoEngine.loadUrl(newTabId, targetDestination)
       }.onFailure { err ->
         isWaitingForTor = false
         tabManager.closeTab(newTabId)
@@ -797,10 +798,15 @@ fun BrowserScreen(
             onUpdateFullscreenWallpaper = { settingsRepo.updateFullscreenWallpaper(it) },
             onUpdateWallpaperScaleMode = { settingsRepo.updateWallpaperScaleMode(it) },
             onNewTab = {
-              tabManager.openTab(
-                profile = settings.defaultProfile,
-                isDesktop = settings.defaultDesktopMode,
-              )
+              val targetProfile = if (activeTab.profile == PrivacyProfile.GHOST || settings.defaultProfile == PrivacyProfile.GHOST) PrivacyProfile.GHOST else PrivacyProfile.SHIELD
+              if (targetProfile == PrivacyProfile.GHOST) {
+                handleOpenGhostTab("about:blank")
+              } else {
+                tabManager.openTab(
+                  profile = targetProfile,
+                  isDesktop = settings.defaultDesktopMode,
+                )
+              }
             },
             onOpenBookmarks = {
               historyBookmarksInitialTab = 1
@@ -1115,18 +1121,28 @@ fun BrowserScreen(
           }
 
           // 3. Ghost / Privacy Profile Toggle Button
+          val isTorActive = isGhost || com.remmi.browser.security.CurrentTorRoute.isGhostActive
           IconButton(
             onClick = handleToggleGhostMode,
             modifier = Modifier
               .size(44.dp)
               .testTag("ghost_mode_toggle_button"),
           ) {
-            Icon(
-              imageVector = if (isGhost) Icons.Default.VpnKey else Icons.Default.Shield,
-              contentDescription = "Toggle Privacy / Ghost Mode",
-              tint = if (hasCustomWallpaper && !isGhost) Color.White else profileColor,
-              modifier = Modifier.size(20.dp),
-            )
+            if (isTorActive) {
+              Icon(
+                painter = painterResource(R.drawable.ic_tor),
+                contentDescription = "Toggle Privacy / Ghost Mode",
+                tint = ThemeCyber.colors.torPurple,
+                modifier = Modifier.size(22.dp),
+              )
+            } else {
+              Icon(
+                imageVector = Icons.Default.Shield,
+                contentDescription = "Toggle Privacy / Ghost Mode",
+                tint = if (hasCustomWallpaper) Color.White else profileColor,
+                modifier = Modifier.size(20.dp),
+              )
+            }
           }
 
           // Home Button (Styled Central Navigation Action)
@@ -1196,7 +1212,10 @@ fun BrowserScreen(
 
           // 5. Tab Switcher Button (Standard Browser Tab Counter Badge)
           IconButton(
-            onClick = { showTabGridSheet = true },
+            onClick = {
+              geckoEngine.captureTabThumbnail(activeTab.id)
+              showTabGridSheet = true
+            },
             modifier = Modifier
               .size(44.dp)
               .testTag("tab_switcher_button"),
@@ -1294,7 +1313,7 @@ fun BrowserScreen(
                 },
                 leadingIcon = {
                   Icon(
-                    Icons.Default.VpnKey,
+                    painter = painterResource(R.drawable.ic_tor),
                     contentDescription = null,
                     tint = ThemeCyber.colors.torPurple,
                     modifier = Modifier.size(18.dp)
@@ -1781,11 +1800,15 @@ fun BrowserScreen(
           scope.launch { com.remmi.browser.engine.GeckoEngineManager.getInstance(context).closeSessionSafely(id) }
         },
         onNewTab = { prof, groupId ->
-          tabManager.openTab(
-            profile = prof,
-            isDesktop = settings.defaultDesktopMode,
-            groupId = groupId
-          )
+          if (prof == PrivacyProfile.GHOST) {
+            handleOpenGhostTab("about:blank")
+          } else {
+            tabManager.openTab(
+              profile = prof,
+              isDesktop = settings.defaultDesktopMode,
+              groupId = groupId
+            )
+          }
           showTabGridSheet = false
         },
         onCreateGroup = { title, colorHex, tabIds ->

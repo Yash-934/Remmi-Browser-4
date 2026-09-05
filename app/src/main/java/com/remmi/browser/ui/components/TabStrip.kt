@@ -565,7 +565,15 @@ fun TabGridSheet(
             .size(36.dp)
             .clip(RoundedCornerShape(10.dp))
             .clickable {
-              onNewTab(PrivacyProfile.SHIELD, selectedSpaceFilter?.takeIf { it != "personal" && it != "incognito" && it != "tor" })
+              val currentActiveTab = tabs.getOrNull(activeIndex)
+              val targetProf = when {
+                selectedSpaceFilter == "tor" -> PrivacyProfile.GHOST
+                selectedSpaceFilter == "incognito" -> PrivacyProfile.INCOGNITO
+                currentActiveTab?.profile == PrivacyProfile.GHOST -> PrivacyProfile.GHOST
+                currentActiveTab?.profile == PrivacyProfile.INCOGNITO -> PrivacyProfile.INCOGNITO
+                else -> PrivacyProfile.SHIELD
+              }
+              onNewTab(targetProf, selectedSpaceFilter?.takeIf { it != "personal" && it != "incognito" && it != "tor" })
               onDismiss()
             }
             .testTag("add_tab_button")
@@ -866,7 +874,15 @@ fun TabGridSheet(
               Spacer(modifier = Modifier.height(14.dp))
               Button(
                 onClick = {
-                  onNewTab(PrivacyProfile.SHIELD, selectedSpaceFilter?.takeIf { it != "personal" && it != "incognito" && it != "tor" })
+                  val currentActiveTab = tabs.getOrNull(activeIndex)
+                  val targetProf = when {
+                    selectedSpaceFilter == "tor" -> PrivacyProfile.GHOST
+                    selectedSpaceFilter == "incognito" -> PrivacyProfile.INCOGNITO
+                    currentActiveTab?.profile == PrivacyProfile.GHOST -> PrivacyProfile.GHOST
+                    currentActiveTab?.profile == PrivacyProfile.INCOGNITO -> PrivacyProfile.INCOGNITO
+                    else -> PrivacyProfile.SHIELD
+                  }
+                  onNewTab(targetProf, selectedSpaceFilter?.takeIf { it != "personal" && it != "incognito" && it != "tor" })
                   onDismiss()
                 },
                 colors = ButtonDefaults.buttonColors(containerColor = activeAccentColor),

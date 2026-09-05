@@ -390,16 +390,17 @@ class TorManager(private val context: Context) {
         RemmiTorService.updateStatus(context, "Ghost Mode Active • Encrypted Tor Routing (127.0.0.1:$activePort)")
         DebugLogManager.log("Step 6/6: TOR_DAEMON_ROUTE_READY on port $activePort • Ready for Gecko proxy application")
 
-        // Step 6: Remote Tor Exit Routing Verification runs asynchronously off the UI path
+        // Step 6: Remote Tor Exit Routing Verification runs asynchronously off the UI path without blocking READY state
         torScope.launch(Dispatchers.IO) {
           try {
-            _bootstrapState.value = TorState.REMOTE_TOR_VERIFY(activePort, 1)
             DebugLogManager.log("Step 5/6 (Async): Verifying Tor exit routing via SOCKS5 proxy on port $activePort...")
-            val verifyResult = TorStatusChecker.verifyTorRouting(
-              socksPort = activePort,
-              currentGeneration = generation
-            )
-            if (verifyResult.isTor && verifyResult.ip != null) {
+            val verifyResult = kotlinx.coroutines.withTimeoutOrNull(4000L) {
+              TorStatusChecker.verifyTorRouting(
+                socksPort = activePort,
+                currentGeneration = generation
+              )
+            }
+            if (verifyResult != null && verifyResult.isTor && verifyResult.ip != null) {
               val updatedCircuit = initialCircuit.copy(
                 verifiedExitIp = verifyResult.ip,
                 exitNodeSummary = "Verified Tor Exit (${verifyResult.ip})",
@@ -409,9 +410,11 @@ class TorManager(private val context: Context) {
               _bootstrapState.value = TorState.READY(activePort, updatedCircuit)
               DebugLogManager.log("[TOR_EXIT_VERIFIED] exitIp=${verifyResult.ip} latency=${verifyResult.latencyMs}ms")
             } else {
-              DebugLogManager.log("[TOR_EXIT_NOTICE] ${verifyResult.message}")
+              _bootstrapState.value = TorState.READY(activePort, initialCircuit)
+              DebugLogManager.log("[TOR_EXIT_NOTICE] Tor exit verification completed: ${verifyResult?.message ?: "timeout"}")
             }
           } catch (e: Exception) {
+            _bootstrapState.value = TorState.READY(activePort, initialCircuit)
             DebugLogManager.log("[TOR_EXIT_EXCEPTION] ${e.message}")
           }
         }

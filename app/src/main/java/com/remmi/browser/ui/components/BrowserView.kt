@@ -122,7 +122,7 @@ fun BrowserView(
           android.util.Log.i("AppStartup", "STATE_LOG: FIRST_PAGE_STOP (time=${android.os.SystemClock.elapsedRealtime()})")
           // Page load completed, capture preview thumbnail safely
           geckoViewRef?.let { gv ->
-            // com.remmi.browser.engine.TabThumbnailManager.getInstance(context).captureGeckoView(tab.id, gv)
+            com.remmi.browser.engine.TabThumbnailManager.getInstance(context).captureGeckoView(tab.id, gv)
           }
         }
       }
@@ -365,7 +365,7 @@ fun BrowserView(
           geckoEngine.logDestructiveOp("VIEW_ON_RELEASE", tab.id, null, geckoView, tab.url, "AndroidView.onRelease")
           geckoEngine.checkPostNavFailure(tab.id, "VIEW_ON_RELEASE", tab.url)
 
-          // com.remmi.browser.engine.TabThumbnailManager.getInstance(context).captureGeckoView(tab.id, geckoView)
+          com.remmi.browser.engine.TabThumbnailManager.getInstance(context).captureGeckoView(tab.id, geckoView)
           geckoViewRef = null
           // Synchronous detach cleanly removes ownership from attachedViews before clearing view tag
           geckoEngine.detachViewSync(currentTag, geckoView)

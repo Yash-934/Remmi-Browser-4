@@ -21,6 +21,7 @@ import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import com.remmi.browser.engine.TabManager
+import com.remmi.browser.security.PrivacyProfile
 import com.remmi.browser.security.PanicWipeManager
 import com.remmi.browser.storage.RemmiDatabase
 import com.remmi.browser.storage.SettingsRepository
@@ -73,6 +74,7 @@ class MainActivity : FragmentActivity() {
 
     setContent {
       val settings by settingsRepo.settings.collectAsState()
+      val tabManager = remember { TabManager.getInstance() }
       var crashResultToShow by remember { mutableStateOf<CrashExportResult?>(null) }
 
       androidx.compose.runtime.LaunchedEffect(Unit) {
@@ -181,6 +183,10 @@ class MainActivity : FragmentActivity() {
                 },
                 onOpenDebugLogs = {
                   currentScreen = ScreenRoute.DEBUG_LOGS
+                },
+                onOpenUrl = { url ->
+                  currentScreen = ScreenRoute.BROWSER
+                  tabManager.openTab(url = url, profile = PrivacyProfile.GHOST)
                 }
               )
             }

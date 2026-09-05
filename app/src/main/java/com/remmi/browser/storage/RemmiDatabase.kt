@@ -71,8 +71,7 @@ data class BlockedEvent(
 
 @Entity(tableName = "downloads")
 data class DownloadItem(
-  @PrimaryKey(autoGenerate = true) val id: Long = 0,
-  val downloadId: Long = 0,
+  @PrimaryKey val downloadId: Long = 0,
   val fileName: String,
   val url: String,
   val mimeType: String = "",
@@ -232,7 +231,7 @@ interface DownloadDao {
   suspend fun insert(item: DownloadItem)
   @Query("UPDATE downloads SET status = :status WHERE downloadId = :id")
   suspend fun updateStatus(id: Long, status: String)
-  @Query("SELECT * FROM downloads")
+  @Query("SELECT * FROM downloads ORDER BY timestamp DESC")
   fun getAllDownloads(): kotlinx.coroutines.flow.Flow<List<DownloadItem>>
   @Delete
   suspend fun delete(item: DownloadItem)

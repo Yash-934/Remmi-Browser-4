@@ -74,6 +74,9 @@ class TabThumbnailManager private constructor(private val context: Context) {
     if (rawBitmap.isRecycled) return
 
     val scaled = scaleToThumbnail(rawBitmap, TARGET_WIDTH)
+    if (scaled !== rawBitmap && !rawBitmap.isRecycled) {
+      try { rawBitmap.recycle() } catch (_: Throwable) {}
+    }
     memoryCache.put(tabId, scaled)
 
     // Update reactive version trigger
@@ -94,6 +97,13 @@ class TabThumbnailManager private constructor(private val context: Context) {
   }
 
   fun captureGeckoView(tabId: String, geckoView: GeckoView) {
+    if (android.os.Looper.myLooper() != android.os.Looper.getMainLooper()) {
+      android.os.Handler(android.os.Looper.getMainLooper()).post {
+        captureGeckoView(tabId, geckoView)
+      }
+      return
+    }
+
     val session = geckoView.session
     val sessId = session?.let { "0x" + Integer.toHexString(System.identityHashCode(it)) } ?: "none"
     val gvId = "0x" + Integer.toHexString(System.identityHashCode(geckoView))
