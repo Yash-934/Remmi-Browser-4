@@ -582,8 +582,7 @@ fun BrowserScreen(
           onUrlSubmit = { target ->
             val sanitized = NetworkHardening.sanitizeUrl(target)
             tabManager.updateTab(activeTab.id) { it.copy(url = sanitized, isReaderMode = false, readerArticle = null) }
-            if (activeTab.profile != PrivacyProfile.GHOST && activeTab.profile != PrivacyProfile.INCOGNITO) {
-            }
+            geckoEngine.loadUrl(activeTab.id, sanitized, forceReload = true)
           },
           onReload = { geckoEngine.reload(activeTab.id) },
           onToggleBookmark = {

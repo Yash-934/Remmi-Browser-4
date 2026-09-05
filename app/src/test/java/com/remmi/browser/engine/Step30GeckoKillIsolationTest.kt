@@ -263,4 +263,36 @@ class Step30GeckoKillIsolationTest {
     assertFalse("Active recovery cleared on target match", manager.hasActiveRecovery(tabId))
     assertEquals(false, capturedLoading)
   }
+
+  /**
+   * Test 5: Explicit user reload bypasses duplicate suppression and re-dispatches load
+   */
+  @Test
+  fun testReloadBypassesDuplicateSuppressionAndReopensSession() = runBlocking {
+    val tab = tabManager.createTab("https://news.ycombinator.com/")
+    val tabId = tab.id
+    val settings = GeckoSessionSettings.Builder().build()
+    val session = GeckoSession(settings)
+    manager.setSessionForTesting(tabId, session)
+
+    val geckoView = GeckoView(context).apply { tag = tabId }
+    manager.attachView(
+      tabId = tabId,
+      geckoView = geckoView,
+      profile = PrivacyProfile.SHIELD,
+      isDesktopMode = false,
+      callbacks = testCallbacks
+    )
+
+    val reloaded = mutableListOf<String>()
+    manager.uriLoaderForTest = { _, _, url -> reloaded.add(url) }
+    manager.loadUrl(tabId, "https://news.ycombinator.com/")
+    assertEquals("Initial load dispatches", 1, reloaded.size)
+    reloaded.clear()
+
+    // Explicit reload must NOT be dropped as duplicate
+    manager.reload(tabId)
+    assertEquals("Explicit reload dispatches despite identical targetUrl", 1, reloaded.size)
+    assertEquals("https://news.ycombinator.com/", reloaded.first())
+  }
 }

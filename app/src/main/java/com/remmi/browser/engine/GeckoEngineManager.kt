@@ -1875,9 +1875,12 @@ class GeckoEngineManager private constructor(private val context: Context) {
     val attachedView = attachedViews[tabId]
     if (attachedView != null) {
       try {
-        if (attachedView.session !== session) {
-          attachedView.setSession(session)
+        if (attachedView.session === session) {
+          try {
+            attachedView.releaseSession()
+          } catch (_: Exception) {}
         }
+        attachedView.setSession(session)
         session.setActive(true)
       } catch (e: Exception) {
         Log.w(TAG, "[GECKO] Failed to re-link session to GeckoView on recovery: ${e.message}")
@@ -2032,8 +2035,13 @@ class GeckoEngineManager private constructor(private val context: Context) {
       }
     }
 
-    if (view != null && view.session !== session) {
+    if (view != null) {
       try {
+        if (view.session === session) {
+          try {
+            view.releaseSession()
+          } catch (_: Exception) {}
+        }
         view.setSession(session)
         session.setActive(true)
       } catch (e: Exception) {
@@ -2295,7 +2303,7 @@ class GeckoEngineManager private constructor(private val context: Context) {
 
   // --- High-Level Navigation & Session Commands ---
 
-  fun loadUrl(tabId: String, url: String) {
+  fun loadUrl(tabId: String, url: String, forceReload: Boolean = false) {
     if (url.isBlank()) return
     val tab = TabManager.getInstance().getTab(tabId)
     val isGhost = (tab?.profile == PrivacyProfile.GHOST) || (currentProfile == PrivacyProfile.GHOST)
@@ -2311,7 +2319,7 @@ class GeckoEngineManager private constructor(private val context: Context) {
     }
     
     if (Looper.myLooper() != Looper.getMainLooper()) {
-      mainHandler.post { loadUrl(tabId, targetUrl) }
+      mainHandler.post { loadUrl(tabId, targetUrl, forceReload) }
       return
     }
     assertMainThread("LOAD_URL id=$tabId")
@@ -2370,7 +2378,7 @@ class GeckoEngineManager private constructor(private val context: Context) {
     val currentViewId = attachedViews[tabId]?.let { "0x" + Integer.toHexString(System.identityHashCode(it)) } ?: "none"
 
     val isRecoveryActive = activeRecovery != null || pendingContentRecoveries.containsKey(tabId)
-    val isActualDuplicate = (lastDispatchedUrls[tabId] == targetUrl) && !isRecoveryActive
+    val isActualDuplicate = !forceReload && (lastDispatchedUrls[tabId] == targetUrl) && !isRecoveryActive
 
     if (isActualDuplicate) {
       logNavDuplicateClassification(
@@ -2420,6 +2428,23 @@ class GeckoEngineManager private constructor(private val context: Context) {
         }
       }
 
+      val attachedView = attachedViews[tabId]
+      if (attachedView != null) {
+        try {
+          if (forceReload || !currentSession.isOpen || attachedView.session !== currentSession) {
+            if (attachedView.session === currentSession) {
+              try {
+                attachedView.releaseSession()
+              } catch (_: Exception) {}
+            }
+            attachedView.setSession(currentSession)
+          }
+          currentSession.setActive(true)
+        } catch (e: Exception) {
+          Log.w(TAG, "[GECKO] Failed to re-link session to GeckoView on loadUrl: ${e.message}")
+        }
+      }
+
       val testLoader = uriLoaderForTest
       if (testLoader != null) {
         testLoader(tabId, currentSession, targetUrl)
@@ -2449,8 +2474,10 @@ class GeckoEngineManager private constructor(private val context: Context) {
       com.remmi.browser.util.DebugLogManager.log(superMsg)
     }
 
+    lastRecoveredGenerations.remove(tabId)
+
     if (!targetUrl.isNullOrBlank()) {
-      loadUrl(tabId, targetUrl)
+      loadUrl(tabId, targetUrl, forceReload = true)
     } else {
       onMainSession(tabId, "RELOAD") { session ->
         val url = lastDispatchedUrls[tabId] ?: "reload"
