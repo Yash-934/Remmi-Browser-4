@@ -256,7 +256,19 @@
   window.addEventListener('pagehide', cleanupPageState, { capture: true, once: true });
   window.addEventListener('unload', cleanupPageState, { capture: true, once: true });
 
+  const UNIVERSAL_BAIT_SELECTORS = [
+    '.adsbox', '.ad-banner', '.ad-placement', '.ad_unit',
+    '.banner-ad', '.textads', '.sponsor-post', '.sponsor-content',
+    '.google-ads', '.google-ads-box', '[id^="google_ads_"]',
+    '.ads-holder', '#ad-banner', '#banner-ad-box', '.ad-zone',
+    '.ad-slot', '.advertisement-card', '.ad-wrapper', '.ad-header',
+    '.ad_box', '.ad-unit', '.ad_top', '.ad_bottom', '.ad_sidebar',
+    '.native-ad-unit', '[class*="sponsored"]', '[class*="google_ads"]',
+    '[class*="ad-container"]'
+  ];
+
   function startCosmeticPipeline() {
+    injectSelectors(UNIVERSAL_BAIT_SELECTORS);
     fetchInitialCosmetics();
 
     // Only run dynamic DOM mutation scanning in the top-level browsing context.

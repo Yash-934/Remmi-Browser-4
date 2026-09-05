@@ -1040,9 +1040,22 @@ class AdblockBridge {
     val forceHideList = mutableListOf<String>()
     
     fun matchRules(rules: List<Pair<String?, String>>, targetList: MutableList<String>) {
+      val classSet = classes.toSet()
+      val idSet = ids.toSet()
       for ((domain, selector) in rules) {
+        val s = selector.trim()
         if (domain == null) {
-          targetList.add(selector)
+          if (classes.isEmpty() && ids.isEmpty()) {
+            targetList.add(selector)
+          } else {
+            if (s.startsWith(".") && classSet.contains(s.substring(1))) {
+              targetList.add(selector)
+            } else if (s.startsWith("#") && idSet.contains(s.substring(1))) {
+              targetList.add(selector)
+            } else if (url.isNotEmpty()) {
+              targetList.add(selector)
+            }
+          }
         } else {
           val domains = domain.split(",")
           val matches = domains.any { d ->
@@ -1151,16 +1164,8 @@ class AdblockBridge {
       }
     }
 
-    return CosmeticResources(
-      ok = true,
-      generation = currentGen,
-      hideSelectors = emptyList(),
-      forceHideSelectors = emptyList(),
-      procedural = emptyList(),
-      proceduralCount = 0,
-      generics = true,
-      error = null
-    )
+    // Fall back to getCosmeticResources with classes and IDs
+    return getCosmeticResources(url = "", classes = classes, ids = ids, exceptions = exceptions)
   }
 
   fun shouldBlock(url: String, sourceUrl: String = "", resourceType: String = "other"): Boolean {
@@ -1415,6 +1420,7 @@ class AdblockBridge {
     val DEFAULT_DOMAINS = listOf(
       "doubleclick.net", "googlesyndication.com", "google-analytics.com",
       "googletagmanager.com", "adservice.google.com", "admob.com",
+      "googleadservices.com", "securepubads.g.doubleclick.net",
       "adnxs.com", "adsrvr.org", "criteo.com", "criteo.net",
       "outbrain.com", "taboola.com", "scorecardresearch.com",
       "quantserve.com", "quantcount.com", "moatads.com",
@@ -1429,14 +1435,32 @@ class AdblockBridge {
       "yieldmo.com", "indexww.com", "chartbeat.com", "adroll.com",
       "advertising.com", "amazon-adsystem.com", "bidswitch.net",
       "revcontent.com", "mgid.com", "zergnet.com", "popads.net",
-      "mc.yandex.ru", "yandex.ru", "coinhive.com"
+      "mc.yandex.ru", "yandex.ru", "an.yandex.ru", "metrika.yandex.ru",
+      "buysellads.com", "buysellads.net", "sentry.io", "sentry-cdn.com",
+      "browser.sentry-cdn.com", "bugsnag.com", "rollbar.com",
+      "propellerads.com", "adcash.com", "yllix.com", "coinhive.com"
     )
 
     val DEFAULT_PATTERNS = listOf(
       "/ads/", "/ad-banner", "/advertisement", "/trackers/",
       "pixel.gif", "beacon.js", "analytics.js", "gtag/js",
       "pagead2.googlesyndication.com", "adserver.", "adsystem.",
-      "telemetry.", "tracking.", "statcounter.com"
+      "telemetry.", "tracking.", "statcounter.com",
+      "srv.buysellads.com", "cdn4.buysellads.net", "static.criteo.net",
+      "bidder.criteo.com", "cdn.taboola.com", "trc.taboola.com",
+      "widgets.outbrain.com", "traffic.outbrain.com", "static.hotjar.com",
+      "script.hotjar.com"
+    )
+
+    val DEFAULT_COSMETIC_RULES = listOf(
+      ".adsbox", ".ad-banner", ".ad-placement", ".ad_unit",
+      ".banner-ad", ".textads", ".sponsor-post", ".sponsor-content",
+      ".google-ads", ".google-ads-box", "[id^=\"google_ads_\"]",
+      ".ads-holder", "#ad-banner", "#banner-ad-box", ".ad-zone",
+      ".ad-slot", ".advertisement-card", ".ad-wrapper", ".ad-header",
+      ".ad_box", ".ad-unit", ".ad_top", ".ad_bottom", ".ad_sidebar",
+      ".native-ad-unit", "[class*=\"sponsored\"]", "[class*=\"google_ads\"]",
+      "[class*=\"ad-container\"]"
     )
 
     @Volatile

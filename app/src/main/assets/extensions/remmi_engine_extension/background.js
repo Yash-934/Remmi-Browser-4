@@ -551,7 +551,8 @@ if (typeof browser !== 'undefined' && browser.tabs) {
 browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message) return;
   
-  if (!sender || !sender.tab || !sender.tab.url || !sender.tab.url.startsWith("http")) {
+  const senderUrl = (sender && sender.tab && sender.tab.url) || (sender && sender.url) || message.url || "";
+  if (!senderUrl || (!senderUrl.startsWith("http://") && !senderUrl.startsWith("https://"))) {
     return;
   }
 
