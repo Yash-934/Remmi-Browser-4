@@ -1170,6 +1170,21 @@ class GeckoEngineManager private constructor(private val context: Context) {
             }
         }
 
+        // Evaluate top-level ad/tracker navigation blocking
+        if (url.isNotBlank() && !isInternalOrIgnoredUrl(url)) {
+          val isAdOrTracker = com.remmi.adblock.AdblockBridge.getInstance().shouldBlock(
+            url = url,
+            sourceUrl = tab?.url ?: "",
+            resourceType = "main_frame"
+          )
+          if (isAdOrTracker) {
+            val blockMsg = "[FORENSIC] [NAV_ERROR] tabId=$tabId session=$sessId view=$viewId navId=$navId url=$url error=adblock_blocked gen=$gen elapsedRealtime=$now"
+            Log.w(TAG, blockMsg)
+            com.remmi.browser.util.DebugLogManager.log(blockMsg)
+            return GeckoResult.fromValue(AllowOrDeny.DENY)
+          }
+        }
+
         val activeRecovery = activeRecoveries[tabId]
         if (activeRecovery != null && 
             activeRecovery.session === session && 
