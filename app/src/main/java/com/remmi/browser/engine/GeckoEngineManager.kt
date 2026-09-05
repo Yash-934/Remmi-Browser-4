@@ -1871,6 +1871,19 @@ class GeckoEngineManager private constructor(private val context: Context) {
       }
     }
 
+    // CRITICAL: Ensure GeckoView reconnects to session display surface after content process crash
+    val attachedView = attachedViews[tabId]
+    if (attachedView != null) {
+      try {
+        if (attachedView.session !== session) {
+          attachedView.setSession(session)
+        }
+        session.setActive(true)
+      } catch (e: Exception) {
+        Log.w(TAG, "[GECKO] Failed to re-link session to GeckoView on recovery: ${e.message}")
+      }
+    }
+
     // 5. Issue recovery load
     val loadMsg = "[FORENSIC][CONTENT_RECOVERY_LOAD] tabId=$tabId session=$sessId view=$viewId navId=$navId url=$currUrl gen=$gen elapsedRealtime=$now"
     Log.i(TAG, loadMsg)
@@ -2016,6 +2029,15 @@ class GeckoEngineManager private constructor(private val context: Context) {
             Log.w(TAG, "[GECKO] Failed to reopen session on tabId=$tabId: ${e.message}")
           }
         }
+      }
+    }
+
+    if (view != null && view.session !== session) {
+      try {
+        view.setSession(session)
+        session.setActive(true)
+      } catch (e: Exception) {
+        Log.w(TAG, "[GECKO] Failed to link session to view in resume: ${e.message}")
       }
     }
 
@@ -2410,23 +2432,31 @@ class GeckoEngineManager private constructor(private val context: Context) {
   }
 
   fun reload(tabId: String) {
-    onMainSession(tabId, "RELOAD") { session ->
-      val url = lastDispatchedUrls[tabId] ?: "reload"
-      val (navId, gen) = allocateNavigationGeneration(tabId, "reload", url)
-      lastDispatchedUrls.remove(tabId)
-      val pendingRec = pendingContentRecoveries.remove(tabId)
-      if (pendingRec != null) {
-        transitionRecoveryState(tabId, RecoveryState.SUPERSEDED, pendingRec.navId, pendingRec.generation, "superseded_by_reload")
+    val targetUrl = lastDispatchedUrls[tabId]?.takeIf { it.isNotBlank() && it != "about:blank" && !it.startsWith("remmi://") }
+      ?: lastObservedUrls[tabId]?.takeIf { it.isNotBlank() && it != "about:blank" && !it.startsWith("remmi://") }
+      ?: TabManager.getInstance().getTab(tabId)?.url?.takeIf { it.isNotBlank() && it != "about:blank" && !it.startsWith("remmi://") }
+
+    val pendingRec = pendingContentRecoveries.remove(tabId)
+    if (pendingRec != null) {
+      transitionRecoveryState(tabId, RecoveryState.SUPERSEDED, pendingRec.navId, pendingRec.generation, "superseded_by_reload")
+    }
+    val activeRecovery = activeRecoveries.remove(tabId)
+    if (activeRecovery != null) {
+      activeRecovery.timeoutRunnable?.let { mainHandler.removeCallbacks(it) }
+      transitionRecoveryState(tabId, RecoveryState.SUPERSEDED, activeRecovery.navId, activeRecovery.generation, "superseded_by_reload")
+      val superMsg = "[FORENSIC][CONTENT_RECOVERY_SUPERSEDED] tabId=$tabId url=${activeRecovery.targetUrl} reason=reload elapsedRealtime=${android.os.SystemClock.elapsedRealtime()}"
+      Log.i(TAG, superMsg)
+      com.remmi.browser.util.DebugLogManager.log(superMsg)
+    }
+
+    if (!targetUrl.isNullOrBlank()) {
+      loadUrl(tabId, targetUrl)
+    } else {
+      onMainSession(tabId, "RELOAD") { session ->
+        val url = lastDispatchedUrls[tabId] ?: "reload"
+        allocateNavigationGeneration(tabId, "reload", url)
+        session.reload()
       }
-      val activeRecovery = activeRecoveries.remove(tabId)
-      if (activeRecovery != null) {
-        activeRecovery.timeoutRunnable?.let { mainHandler.removeCallbacks(it) }
-        transitionRecoveryState(tabId, RecoveryState.SUPERSEDED, activeRecovery.navId, activeRecovery.generation, "superseded_by_reload")
-        val superMsg = "[FORENSIC][CONTENT_RECOVERY_SUPERSEDED] tabId=$tabId url=${activeRecovery.targetUrl} reason=reload elapsedRealtime=${android.os.SystemClock.elapsedRealtime()}"
-        Log.i(TAG, superMsg)
-        com.remmi.browser.util.DebugLogManager.log(superMsg)
-      }
-      session.reload()
     }
   }
 

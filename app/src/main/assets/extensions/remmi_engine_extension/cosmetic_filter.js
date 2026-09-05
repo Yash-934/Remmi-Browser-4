@@ -209,7 +209,11 @@
         const m = mutations[i];
         if (m.type === 'childList') {
           for (let j = 0; j < m.addedNodes.length; j++) {
-            if (collectNodeTree(m.addedNodes[j])) {
+            const node = m.addedNodes[j];
+            if (node.nodeName === 'STYLE' || (node.hasAttribute && node.hasAttribute('data-remmi-cosmetic'))) {
+              continue;
+            }
+            if (collectNodeTree(node)) {
               shouldScan = true;
             }
           }
@@ -253,16 +257,19 @@
   window.addEventListener('unload', cleanupPageState, { capture: true, once: true });
 
   function startCosmeticPipeline() {
-    setupMutationObserver();
-    
-    // Initial scan of whatever is already in the DOM
-    if (document.documentElement) {
-      if (collectNodeTree(document.documentElement)) {
-        scheduleScan();
+    fetchInitialCosmetics();
+
+    // Only run dynamic DOM mutation scanning in the top-level browsing context.
+    // Subframes/iframes have their elements covered by top-level rules or initial selectors.
+    // Running full recursive DOM mutation crawlers in dozens of nested ad test iframes causes CPU/memory exhaustion.
+    if (window === window.top) {
+      setupMutationObserver();
+      if (document.documentElement) {
+        if (collectNodeTree(document.documentElement)) {
+          scheduleScan();
+        }
       }
     }
-    
-    fetchInitialCosmetics();
   }
 
   startCosmeticPipeline();

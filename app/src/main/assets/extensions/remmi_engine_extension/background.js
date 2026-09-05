@@ -490,10 +490,10 @@ if (typeof browser !== 'undefined' && browser.tabs) {
 }
 
 // 4. Content Script Message Listener (Cosmetics & Click Inspection)
-browser.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message) return;
   
-  if (!_sender || !_sender.tab || !_sender.tab.url || !_sender.tab.url.startsWith("http")) {
+  if (!sender || !sender.tab || !sender.tab.url || !sender.tab.url.startsWith("http")) {
     return;
   }
 
@@ -523,7 +523,7 @@ browser.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       return true;
     }
 
-    const url = message.url || (_sender.tab ? _sender.tab.url : "");
+    const url = message.url || (sender.tab ? sender.tab.url : "");
     const hostname = message.hostname || "";
     const cacheKey = [
       currentProfile,
@@ -558,7 +558,7 @@ browser.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         }, 2000, "COSMETIC_RESOURCES_TIMEOUT");
         const elapsed = Date.now() - startTs;
         if (resp && resp.ok) {
-          const tabId = _sender && _sender.tab ? _sender.tab.id : null;
+          const tabId = sender && sender.tab ? sender.tab.id : null;
           setCachedCosmetic(cacheKey, resp, tabId);
         }
         return resp || { ok: false, hideSelectors: [] };
@@ -626,7 +626,7 @@ browser.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         }, 2000, "HIDDEN_CLASS_ID_TIMEOUT");
         const elapsed = Date.now() - startTs;
         if (resp && resp.ok) {
-          const tabId = _sender && _sender.tab ? _sender.tab.id : null;
+          const tabId = sender && sender.tab ? sender.tab.id : null;
           setCachedCosmetic(cacheKey, resp, tabId);
         }
         return resp || { ok: false, hideSelectors: [] };
