@@ -19,6 +19,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -78,31 +79,42 @@ fun BrowserView(
   var lastNavigatedUrl by remember(tab.id) { mutableStateOf(geckoEngine.getLastDispatchedUrl(tab.id) ?: "") }
   val isViewAttached by geckoEngine.getViewAttachmentState(tab.id).collectAsState()
 
+  val currentOnUrlChange by rememberUpdatedState(onUrlChange)
+  val currentOnTitleChange by rememberUpdatedState(onTitleChange)
+  val currentOnProgressChange by rememberUpdatedState(onProgressChange)
+  val currentOnLoadingChange by rememberUpdatedState(onLoadingChange)
+  val currentOnSecurityChange by rememberUpdatedState(onSecurityChange)
+  val currentOnNavStateChange by rememberUpdatedState(onNavStateChange)
+  val currentOnTrackerBlocked by rememberUpdatedState(onTrackerBlocked)
+  val currentOnScrollChange by rememberUpdatedState(onScrollChange)
+  val currentOnReaderArticleExtracted by rememberUpdatedState(onReaderArticleExtracted)
+  val currentOnContextMenuRequested by rememberUpdatedState(onContextMenuRequested)
+
   // Callbacks bundle decoupled from GeckoSession
   val tabCallbacks = remember(tab.id, tab.profile) {
     object : GeckoTabCallbacks {
       override fun onUrlChange(url: String) {
         lastNavigatedUrl = url
-        onUrlChange(url)
+        currentOnUrlChange(url)
       }
 
       override fun onTitleChange(title: String) {
-        onTitleChange(title)
+        currentOnTitleChange(title)
       }
 
       override fun onProgressChange(progress: Int) {
         if ((isCurrentlyLoading || tab.isLoading) && progress > 0) {
           progressFloat = (progress.toFloat() / 100f).coerceIn(0f, 1f)
-          onProgressChange(progress)
+          currentOnProgressChange(progress)
         } else {
           progressFloat = 0f
-          onProgressChange(0)
+          currentOnProgressChange(0)
         }
       }
 
       override fun onLoadingChange(isLoading: Boolean) {
         isCurrentlyLoading = isLoading
-        onLoadingChange(isLoading)
+        currentOnLoadingChange(isLoading)
         if (isLoading) {
           progressFloat = 0.1f
         } else {
@@ -116,19 +128,19 @@ fun BrowserView(
       }
 
       override fun onSecurityChange(isSecure: Boolean) {
-        onSecurityChange(isSecure)
+        currentOnSecurityChange(isSecure)
       }
 
       override fun onNavStateChange(canGoBack: Boolean, canGoForward: Boolean) {
-        onNavStateChange(canGoBack, canGoForward)
+        currentOnNavStateChange(canGoBack, canGoForward)
       }
 
       override fun onTrackerBlocked(url: String, type: String) {
-        onTrackerBlocked(url, type)
+        currentOnTrackerBlocked(url, type)
       }
 
       override fun onScrollChanged(scrollX: Int, scrollY: Int, isScrollingDown: Boolean) {
-        onScrollChange?.invoke(isScrollingDown)
+        currentOnScrollChange?.invoke(isScrollingDown)
       }
 
       override fun onExternalResponse(response: WebResponse) {
@@ -150,7 +162,7 @@ fun BrowserView(
       }
 
       override fun onContextMenu(data: WebContextMenuData) {
-        onContextMenuRequested?.invoke(data)
+        currentOnContextMenuRequested?.invoke(data)
       }
     }
   }

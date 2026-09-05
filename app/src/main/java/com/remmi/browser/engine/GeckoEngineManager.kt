@@ -2208,6 +2208,10 @@ class GeckoEngineManager private constructor(private val context: Context) {
       com.remmi.browser.util.DebugLogManager.log(doneMsg)
 
       checkViewInvariants(tabId, "ATTACH_DONE")
+      val currentNav = sessionNavStates[tabId]
+      if (currentNav != null) {
+        callbacks.onNavStateChange(currentNav.first, currentNav.second)
+      }
       dispatchPendingNavigationIfReady(tabId)
       resumePendingContentRecoveryIfAny(tabId)
     } catch (e: Exception) {
@@ -2431,7 +2435,7 @@ class GeckoEngineManager private constructor(private val context: Context) {
       val attachedView = attachedViews[tabId]
       if (attachedView != null) {
         try {
-          if (forceReload || !currentSession.isOpen || attachedView.session !== currentSession) {
+          if (!currentSession.isOpen || attachedView.session !== currentSession) {
             if (attachedView.session === currentSession) {
               try {
                 attachedView.releaseSession()
@@ -2530,6 +2534,18 @@ class GeckoEngineManager private constructor(private val context: Context) {
       Log.i(TAG, "[FORENSIC] NAV_FORWARD_GECKO tabId=$tabId sessionHash=${session.hashCode()} thread=${Thread.currentThread().name}")
       session.goForward()
     }
+  }
+
+  fun canGoBack(tabId: String): Boolean {
+    return sessionNavStates[tabId]?.first ?: false
+  }
+
+  fun canGoForward(tabId: String): Boolean {
+    return sessionNavStates[tabId]?.second ?: false
+  }
+
+  fun getNavState(tabId: String): Pair<Boolean, Boolean> {
+    return sessionNavStates[tabId] ?: Pair(false, false)
   }
 
   fun findInPage(tabId: String, query: String, backwards: Boolean = false) {

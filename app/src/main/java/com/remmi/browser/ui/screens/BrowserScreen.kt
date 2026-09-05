@@ -225,6 +225,7 @@ fun BrowserScreen(
   val fillPrompt by autofillHelper.fillPrompt.collectAsState()
 
   val activeTab = tabs.getOrNull(activeTabIndex) ?: tabs.firstOrNull() ?: BrowserTab()
+  val isNewTab = activeTab.url.isBlank() || activeTab.url == "about:blank" || activeTab.url == "remmi://newtab" || activeTab.url == "about:home"
   SideEffect {
     tabManager.recordRecomposition(activeTab.id)
   }
@@ -511,15 +512,16 @@ fun BrowserScreen(
       isFindInPageActive = false
     } else if (activeTab.isReaderMode) {
       tabManager.toggleReaderMode(activeTab.id)
-    } else if (activeTab.canGoBack) {
+    } else if (activeTab.canGoBack || geckoEngine.canGoBack(activeTab.id)) {
       Log.i("BrowserScreen", "[FORENSIC] NAV_BACK_REQUEST tabId=${activeTab.id} action=GO_BACK url=${activeTab.url}")
       geckoEngine.goBack(activeTab.id)
-    } else if (activeTab.url != "about:blank" && activeTab.url != "remmi://newtab" && activeTab.url.isNotBlank()) {
+    } else if (!isNewTab) {
       Log.i("BrowserScreen", "[FORENSIC] NAV_BACK_NO_HISTORY tabId=${activeTab.id} action=RESET_TO_NEW_TAB url=${activeTab.url}")
       // If on a loaded website with no back history in session, go back to New Tab page
       tabManager.updateTab(activeTab.id) {
         it.copy(url = "about:blank", title = "New Tab", canGoBack = false, canGoForward = false, isReaderMode = false, isSecure = true, readerArticle = null)
       }
+      geckoEngine.resetToNewTab(activeTab.id)
     } else if (tabs.size > 1) {
       // If on New Tab page and multiple tabs exist, close active tab
       tabManager.closeTab(activeTab.id)
@@ -536,7 +538,6 @@ fun BrowserScreen(
     }
   }
 
-  val isNewTab = activeTab.url.isBlank() || activeTab.url == "about:blank" || activeTab.url == "remmi://newtab" || activeTab.url == "about:home"
   val isFullBgActive = isNewTab && settings.fullscreenWallpaperEnabled && (settings.customWallpaperUri != null || settings.backgroundAnimation.isNotEmpty())
 
   Box(
@@ -581,8 +582,13 @@ fun BrowserScreen(
           isReaderActive = activeTab.isReaderMode,
           onUrlSubmit = { target ->
             val sanitized = NetworkHardening.sanitizeUrl(target)
-            tabManager.updateTab(activeTab.id) { it.copy(url = sanitized, isReaderMode = false, readerArticle = null) }
-            geckoEngine.loadUrl(activeTab.id, sanitized, forceReload = true)
+            val currentTab = activeTab
+            if (currentTab.url == sanitized) {
+              geckoEngine.reload(currentTab.id)
+            } else {
+              tabManager.updateTab(currentTab.id) { it.copy(url = sanitized, isReaderMode = false, readerArticle = null) }
+              geckoEngine.loadUrl(currentTab.id, sanitized)
+            }
           },
           onReload = { geckoEngine.reload(activeTab.id) },
           onToggleBookmark = {
@@ -854,9 +860,11 @@ fun BrowserScreen(
                 }
               },
               onNavStateChange = { canBack, canForward ->
-                if (activeTab.canGoBack != canBack || activeTab.canGoForward != canForward) {
-                  tabManager.updateTab(activeTab.id) {
-                    it.copy(canGoBack = canBack, canGoForward = canForward)
+                tabManager.updateTab(activeTab.id) { tab ->
+                  if (tab.canGoBack != canBack || tab.canGoForward != canForward) {
+                    tab.copy(canGoBack = canBack, canGoForward = canForward)
+                  } else {
+                    tab
                   }
                 }
               },
@@ -1054,9 +1062,21 @@ fun BrowserScreen(
           verticalAlignment = Alignment.CenterVertically,
         ) {
           // 1. Back Button
+          val canNavigateBack = activeTab.canGoBack || geckoEngine.canGoBack(activeTab.id) || !isNewTab
           IconButton(
-            onClick = { geckoEngine.goBack(activeTab.id) },
-            enabled = activeTab.canGoBack,
+            onClick = {
+              if (activeTab.canGoBack || geckoEngine.canGoBack(activeTab.id)) {
+                Log.i("BrowserScreen", "[FORENSIC] NAV_BACK_TOOLBAR tabId=${activeTab.id} action=GO_BACK")
+                geckoEngine.goBack(activeTab.id)
+              } else if (!isNewTab) {
+                Log.i("BrowserScreen", "[FORENSIC] NAV_BACK_TOOLBAR tabId=${activeTab.id} action=RESET_TO_NEW_TAB")
+                tabManager.updateTab(activeTab.id) {
+                  it.copy(url = "about:blank", title = "New Tab", canGoBack = false, canGoForward = false, isReaderMode = false, isSecure = true, readerArticle = null)
+                }
+                geckoEngine.resetToNewTab(activeTab.id)
+              }
+            },
+            enabled = canNavigateBack,
             modifier = Modifier
               .size(44.dp)
               .testTag("nav_back_button"),
@@ -1064,7 +1084,7 @@ fun BrowserScreen(
             Icon(
               imageVector = Icons.AutoMirrored.Filled.ArrowBack,
               contentDescription = "Back",
-              tint = if (activeTab.canGoBack) {
+              tint = if (canNavigateBack) {
                 if (hasCustomWallpaper) Color.White else ThemeCyber.colors.primary
               } else {
                 if (hasCustomWallpaper) Color.White.copy(alpha = 0.35f) else ThemeCyber.colors.textMuted.copy(alpha = 0.4f)
@@ -1074,9 +1094,10 @@ fun BrowserScreen(
           }
 
           // 2. Forward Button
+          val canNavigateForward = activeTab.canGoForward || geckoEngine.canGoForward(activeTab.id)
           IconButton(
             onClick = { geckoEngine.goForward(activeTab.id) },
-            enabled = activeTab.canGoForward,
+            enabled = canNavigateForward,
             modifier = Modifier
               .size(44.dp)
               .testTag("nav_forward_button"),
@@ -1084,7 +1105,7 @@ fun BrowserScreen(
             Icon(
               imageVector = Icons.AutoMirrored.Filled.ArrowForward,
               contentDescription = "Forward",
-              tint = if (activeTab.canGoForward) {
+              tint = if (canNavigateForward) {
                 if (hasCustomWallpaper) Color.White else ThemeCyber.colors.primary
               } else {
                 if (hasCustomWallpaper) Color.White.copy(alpha = 0.35f) else ThemeCyber.colors.textMuted.copy(alpha = 0.4f)
