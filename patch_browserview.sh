@@ -1,0 +1,2 @@
+sed -i 's/com.remmi.browser.engine.TabThumbnailManager.getInstance(context).captureGeckoView(tab.id, gv)/\/\/ com.remmi.browser.engine.TabThumbnailManager.getInstance(context).captureGeckoView(tab.id, gv)/g' app/src/main/java/com/remmi/browser/ui/components/BrowserView.kt
+sed -i 's/com.remmi.browser.engine.TabThumbnailManager.getInstance(context).captureGeckoView(tab.id, geckoView)/\/\/ com.remmi.browser.engine.TabThumbnailManager.getInstance(context).captureGeckoView(tab.id, geckoView)/g' app/src/main/java/com/remmi/browser/ui/components/BrowserView.kt
