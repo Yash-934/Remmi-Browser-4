@@ -181,8 +181,8 @@ object ClickTargetAnalyzer {
       }
     }
 
-    // 2. Suspicious popup on transparent/overlay layer
-    if (candidates.any { it.details.contains("popup", ignoreCase = true) && (it.isOverlay || it.isTransparent) }) {
+    // 2. Suspicious popup on overlay layer
+    if (candidates.any { it.details.contains("popup", ignoreCase = true) && (it.isOverlay || it.type == ClickTargetType.SUSPICIOUS_OVERLAY) }) {
       return true
     }
 
@@ -204,7 +204,7 @@ object ClickTargetAnalyzer {
       val registrableDomains = distinctUrls.map { getRegistrableDomain(it) }.distinct()
       if (registrableDomains.size > 1) {
         val hasConflictingLayers = candidates.any {
-          it.isTransparent || it.isOverlay || it.type == ClickTargetType.SUSPICIOUS_OVERLAY || it.tagName != candidates[0].tagName
+          it.isOverlay || it.type == ClickTargetType.SUSPICIOUS_OVERLAY
         }
         if (hasConflictingLayers) {
           return true

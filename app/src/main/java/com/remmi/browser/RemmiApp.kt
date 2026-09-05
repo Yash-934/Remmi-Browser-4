@@ -28,7 +28,14 @@ class RemmiApp : Application(), SingletonImageLoader.Factory {
           connectTimeoutSeconds = 10L,
           readTimeoutSeconds = 15L
         )
-        client.newCall(request)
+        val reqBuilder = request.newBuilder()
+        if (request.header("User-Agent") == null) {
+          reqBuilder.header("User-Agent", "Mozilla/5.0 (Linux; Android 14; Mobile; rv:135.0) Gecko/135.0 Firefox/135.0")
+        }
+        if (request.header("Accept") == null) {
+          reqBuilder.header("Accept", "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8")
+        }
+        client.newCall(reqBuilder.build())
       } catch (e: Exception) {
         throw java.io.IOException("Route authority rejected Coil fetch: ${e.message}", e)
       }

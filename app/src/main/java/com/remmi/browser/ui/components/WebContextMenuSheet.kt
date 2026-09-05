@@ -62,6 +62,7 @@ fun WebContextMenuSheet(
   onDismiss: () -> Unit,
   onOpenInNewTab: (url: String) -> Unit,
   onOpenInNewTabInBackground: (url: String) -> Unit,
+  onOpenInTabGroup: (url: String) -> Unit,
   onOpenInInPrivateTab: (url: String) -> Unit,
   onOpenInNewWindow: (url: String) -> Unit,
   onPreviewPage: (url: String, title: String) -> Unit,
@@ -334,7 +335,7 @@ fun WebContextMenuSheet(
           textColor = textColor,
           onClick = {
             onDismiss()
-            onOpenInNewTabInBackground(linkUrl)
+            onOpenInTabGroup(linkUrl)
           },
           testTag = "menu_open_new_tab_group"
         )
@@ -402,7 +403,18 @@ fun WebContextMenuSheet(
           textColor = textColor,
           onClick = {
             onDismiss()
-            onCopyLinkText(data.linkText ?: data.displayTitle)
+            val textToCopy = if (!data.linkText.isNullOrBlank()) {
+              data.linkText.trim()
+            } else if (!data.linkTitle.isNullOrBlank()) {
+              data.linkTitle.trim()
+            } else if (!data.title.isNullOrBlank()) {
+              data.title.trim()
+            } else if (!data.altText.isNullOrBlank()) {
+              data.altText.trim()
+            } else {
+              data.displayTitle
+            }
+            onCopyLinkText(textToCopy)
           },
           testTag = "menu_copy_link_text"
         )

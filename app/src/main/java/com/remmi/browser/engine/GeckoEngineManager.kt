@@ -107,6 +107,16 @@ class GeckoEngineManager private constructor(private val context: Context) {
       }
     }
 
+    blockExtension.customCosmeticRuleProvider = { host ->
+      com.remmi.browser.security.CustomBlockRuleManager.getInstance(context).getSelectorsForHost(host)
+    }
+    blockExtension.onCustomBlockElement = { host, selector ->
+      com.remmi.browser.security.CustomBlockRuleManager.getInstance(context).addRule(host, selector)
+      mainHandler.post {
+        android.widget.Toast.makeText(context, "Element blocked permanently on $host", android.widget.Toast.LENGTH_SHORT).show()
+      }
+    }
+
     blockExtension.addThreatListener { threatUrl, threatType ->
       mainHandler.post {
         sessionCallbacks.values.forEach { cb ->
@@ -1371,6 +1381,57 @@ class GeckoEngineManager private constructor(private val context: Context) {
         sessionNavStates[tabId] = updated
         sessionCallbacks[tabId]?.onNavStateChange(updated.first, updated.second)
       }
+
+      override fun onNewSession(session: GeckoSession, uri: String): GeckoResult<GeckoSession>? {
+        val sessId = "0x" + Integer.toHexString(System.identityHashCode(session))
+        val now = android.os.SystemClock.elapsedRealtime()
+        val openMsg = "[FORENSIC] [NAV_NEW_SESSION] tabId=$tabId session=$sessId uri=$uri elapsedRealtime=$now"
+        Log.i(TAG, openMsg)
+        com.remmi.browser.util.DebugLogManager.log(openMsg)
+
+        val tab = TabManager.getInstance().getTab(tabId)
+        val isGhost = (tab?.profile == PrivacyProfile.GHOST) || (currentProfile == PrivacyProfile.GHOST)
+
+        // Validate and block malicious popup ads / trackers
+        if (uri.isNotBlank() && uri != "about:blank") {
+          val secDecision = com.remmi.browser.security.NavigationSecurityAuthority.validateAndSanitizeNavigation(uri, isGhost)
+          if (secDecision.decision == com.remmi.browser.security.NavigationDecision.BLOCK) {
+            Log.w(TAG, "[NAV_NEW_SESSION] Blocked popup by NavigationSecurityAuthority: $uri")
+            return GeckoResult.fromValue(null)
+          }
+
+          val isAdOrTracker = com.remmi.adblock.AdblockBridge.getInstance().shouldBlock(uri, sourceUrl = tab?.url ?: "", resourceType = "popup")
+          if (isAdOrTracker) {
+            Log.w(TAG, "[NAV_NEW_SESSION] Blocked popup ad: $uri")
+            return GeckoResult.fromValue(null)
+          }
+        }
+
+        // Create new tab and session on main thread
+        val targetProfile = tab?.profile ?: TabManager.getInstance().activeTab?.profile ?: currentProfile
+        val targetContainer = tab?.containerType ?: TabManager.getInstance().activeTab?.containerType ?: ContainerType.fromProfile(targetProfile)
+        val targetSecurity = tab?.securityLevel ?: TabManager.getInstance().activeTab?.securityLevel ?: SecurityLevel.STANDARD
+        val targetDesktop = tab?.isDesktopMode ?: TabManager.getInstance().activeTab?.isDesktopMode ?: false
+        val targetGroupId = tab?.groupId ?: TabManager.getInstance().activeTab?.groupId
+
+        val newTab = TabManager.getInstance().createTab(
+          url = if (uri.isBlank()) "about:blank" else uri,
+          profile = targetProfile,
+          containerType = targetContainer,
+          securityLevel = targetSecurity,
+          isDesktop = targetDesktop,
+          groupId = targetGroupId
+        )
+        val newSession = getOrCreateSessionInternal(
+          tabId = newTab.id,
+          profile = newTab.profile,
+          securityLevel = newTab.securityLevel,
+          containerType = newTab.containerType,
+          isDesktopMode = newTab.isDesktopMode
+        )
+
+        return GeckoResult.fromValue(newSession)
+      }
     }
 
     // Wire Progress delegate
@@ -1660,6 +1721,8 @@ class GeckoEngineManager private constructor(private val context: Context) {
           sessionCallbacks[tabId]?.onContextMenu(
             WebContextMenuData(
               linkUri = element.linkUri,
+              linkText = element.linkText,
+              linkTitle = element.title,
               srcUri = element.srcUri,
               altText = element.altText,
               title = element.title,
@@ -2577,6 +2640,10 @@ class GeckoEngineManager private constructor(private val context: Context) {
 
   fun executeScript(tabId: String, script: String) {
     com.remmi.adblock.BlockExtension.getInstance().executeScript(tabId, script)
+  }
+
+  fun evalScript(script: String, callback: (result: String, isError: Boolean) -> Unit) {
+    com.remmi.adblock.BlockExtension.getInstance().evalScript(script, callback)
   }
 
   fun printPage(activityContext: Context, tabId: String, pageTitle: String, onFinished: (() -> Unit)? = null) {

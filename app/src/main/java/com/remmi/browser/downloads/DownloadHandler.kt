@@ -136,7 +136,7 @@ class DownloadHandler(private val context: Context) {
     }
 
     val uriStr = Uri.parse(url)
-    val fileName = sanitizeFileName(suggestedFilename ?: uriStr.lastPathSegment ?: "remmi_download")
+    val fileName = sanitizeFileName(suggestedFilename ?: uriStr.lastPathSegment ?: "remmi_download", mimeType)
     val mime = mimeType ?: guessMimeType(fileName)
     val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
     val notifId = (downloadId % Int.MAX_VALUE).toInt()
@@ -388,9 +388,29 @@ class DownloadHandler(private val context: Context) {
     }
   }
 
-  private fun sanitizeFileName(name: String): String {
-    val clean = name.replace(Regex("[^a-zA-Z0-9._-]"), "_")
-    return if (clean.contains(".")) clean else "$clean.bin"
+  private fun sanitizeFileName(name: String, mimeType: String? = null): String {
+    val clean = name.substringBefore('?').substringBefore('#').replace(Regex("[^a-zA-Z0-9._-]"), "_")
+    if (clean.contains(".")) {
+      return clean
+    }
+    val ext = when (mimeType?.lowercase()?.substringBefore(';')) {
+      "text/html" -> "html"
+      "application/pdf" -> "pdf"
+      "application/zip" -> "zip"
+      "application/vnd.android.package-archive" -> "apk"
+      "image/png" -> "png"
+      "image/jpeg", "image/jpg" -> "jpg"
+      "image/webp" -> "webp"
+      "image/gif" -> "gif"
+      "image/svg+xml" -> "svg"
+      "video/mp4" -> "mp4"
+      "video/webm" -> "webm"
+      "audio/mpeg", "audio/mp3" -> "mp3"
+      "text/plain" -> "txt"
+      "application/json" -> "json"
+      else -> "html"
+    }
+    return "$clean.$ext"
   }
 
   private fun formatBytes(bytes: Long): String {

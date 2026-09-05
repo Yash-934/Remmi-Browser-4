@@ -136,6 +136,8 @@ import com.remmi.browser.ui.components.SecurityShieldSheet
 import com.remmi.browser.ui.components.TabGridSheet
 import com.remmi.browser.ui.components.TabStrip
 import com.remmi.browser.ui.components.TerminalUrlBar
+import com.remmi.browser.MainActivity
+import com.remmi.browser.ui.components.SelectTabGroupSheet
 import com.remmi.browser.ui.components.WebContextMenuSheet
 import com.remmi.browser.ui.components.PanicWipeDialog
 import com.remmi.browser.ui.components.RedirectInspectorSheet
@@ -144,6 +146,7 @@ import com.remmi.browser.ui.components.UrlSecuritySheet
 import com.remmi.browser.ui.screens.SecurityCenterScreen
 import com.remmi.browser.security.ClickTargetAnalyzer
 import com.remmi.browser.security.ClickTargetCandidate
+import com.remmi.browser.security.ElementPickerHelper
 import com.remmi.browser.engine.BrowserActions
 import com.remmi.browser.ui.theme.CyberMonoFamily
 import com.remmi.browser.ui.theme.ThemeCyber
@@ -247,6 +250,7 @@ fun BrowserScreen(
   var showSecuritySheet by remember { mutableStateOf(false) }
   var showSecurityCenter by remember { mutableStateOf(false) }
   var showUrlSecuritySheet by remember { mutableStateOf(false) }
+  var isElementPickerActive by remember { mutableStateOf(false) }
   var inspectingRedirectUrl by remember { mutableStateOf<String?>(null) }
   var detectedClickCandidates by remember { mutableStateOf<List<ClickTargetCandidate>>(emptyList()) }
   var showCircuitSheet by remember { mutableStateOf(false) }
@@ -256,6 +260,8 @@ fun BrowserScreen(
   var showReadingListScreen by remember { mutableStateOf(false) }
   var showMenuDropdown by remember { mutableStateOf(false) }
   var showDevMenuDialog by remember { mutableStateOf(false) }
+  var showDevToolsSheet by remember { mutableStateOf(false) }
+  var devToolsInitialTab by remember { mutableStateOf(com.remmi.browser.ui.components.DevToolsTab.CONSOLE) }
   var showPanicWipeDialog by remember { mutableStateOf(false) }
   var showPrintPdfProgress by remember { mutableStateOf(false) }
 
@@ -282,6 +288,7 @@ fun BrowserScreen(
   var activeContextMenuData by remember { mutableStateOf<WebContextMenuData?>(null) }
   var pagePreviewData by remember { mutableStateOf<Pair<String, String>?>(null) }
   var imagePreviewData by remember { mutableStateOf<Pair<String, String>?>(null) }
+  var targetUrlForGroupSelection by remember { mutableStateOf<String?>(null) }
 
   // Find in page state
   var isFindInPageActive by remember { mutableStateOf(false) }
@@ -931,6 +938,57 @@ fun BrowserScreen(
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Bold
               )
+            }
+          }
+        }
+
+        // Floating Banner for Element Picker Mode
+        if (isElementPickerActive) {
+          Surface(
+            modifier = Modifier
+              .align(Alignment.TopCenter)
+              .padding(horizontal = 16.dp, vertical = 10.dp)
+              .fillMaxWidth(),
+            shape = RoundedCornerShape(14.dp),
+            color = ThemeCyber.colors.surface.copy(alpha = 0.95f),
+            border = BorderStroke(1.5.dp, ThemeCyber.colors.primary),
+            shadowElevation = 10.dp,
+          ) {
+            Row(
+              modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+              verticalAlignment = Alignment.CenterVertically
+            ) {
+              Icon(
+                imageVector = Icons.Default.Security,
+                contentDescription = null,
+                tint = ThemeCyber.colors.dangerRed,
+                modifier = Modifier.size(22.dp)
+              )
+              Spacer(modifier = Modifier.width(10.dp))
+              Column(modifier = Modifier.weight(1f)) {
+                Text(
+                  text = "Element Blocker Active",
+                  fontSize = 13.sp,
+                  fontWeight = FontWeight.Bold,
+                  color = ThemeCyber.colors.textPrimary
+                )
+                Text(
+                  text = "Tap any element or ad on the page to block",
+                  fontSize = 11.sp,
+                  color = ThemeCyber.colors.textSecondary
+                )
+              }
+              Button(
+                onClick = {
+                  isElementPickerActive = false
+                  geckoEngine.executeScript(activeTab.id, ElementPickerHelper.getRemovePickerScript())
+                },
+                colors = ButtonDefaults.buttonColors(containerColor = ThemeCyber.colors.surfaceLight),
+                shape = RoundedCornerShape(8.dp),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+              ) {
+                Text("Done", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = ThemeCyber.colors.textPrimary)
+              }
             }
           }
         }
@@ -2019,11 +2077,29 @@ fun BrowserScreen(
         tabManager.openTabInBackground(url = url, profile = activeTab.profile, isDesktop = settings.defaultDesktopMode)
         android.widget.Toast.makeText(context, "Opened in background tab", android.widget.Toast.LENGTH_SHORT).show()
       },
+      onOpenInTabGroup = { url ->
+        targetUrlForGroupSelection = url
+      },
       onOpenInInPrivateTab = { url ->
-        handleOpenGhostTab(url)
+        tabManager.openTab(url = url, profile = PrivacyProfile.INCOGNITO, isDesktop = settings.defaultDesktopMode)
+        android.widget.Toast.makeText(context, "Opened in InPrivate tab", android.widget.Toast.LENGTH_SHORT).show()
       },
       onOpenInNewWindow = { url ->
-        tabManager.openTab(url = url, profile = activeTab.profile, isDesktop = settings.defaultDesktopMode)
+        try {
+          val windowIntent = android.content.Intent(context, MainActivity::class.java).apply {
+            action = android.content.Intent.ACTION_VIEW
+            setData(android.net.Uri.parse(url))
+            addFlags(
+              android.content.Intent.FLAG_ACTIVITY_LAUNCH_ADJACENT or
+              android.content.Intent.FLAG_ACTIVITY_NEW_TASK or
+              android.content.Intent.FLAG_ACTIVITY_MULTIPLE_TASK
+            )
+          }
+          context.startActivity(windowIntent)
+          android.widget.Toast.makeText(context, "Opened in split screen window", android.widget.Toast.LENGTH_SHORT).show()
+        } catch (e: Exception) {
+          tabManager.openTab(url = url, profile = activeTab.profile, isDesktop = settings.defaultDesktopMode)
+        }
       },
       onPreviewPage = { url, title ->
         pagePreviewData = Pair(url, title)
@@ -2042,15 +2118,29 @@ fun BrowserScreen(
         android.widget.Toast.makeText(context, "Link text copied", android.widget.Toast.LENGTH_SHORT).show()
       },
       onCopyImage = { imgUrl ->
-        clipboardMgr.copyWithAutoClear(imgUrl)
-        android.widget.Toast.makeText(context, "Image link copied", android.widget.Toast.LENGTH_SHORT).show()
+        scope.launch {
+          android.widget.Toast.makeText(context, "Copying image to clipboard...", android.widget.Toast.LENGTH_SHORT).show()
+          val success = clipboardMgr.copyImage(imgUrl)
+          if (success) {
+            android.widget.Toast.makeText(context, "Image copied to clipboard", android.widget.Toast.LENGTH_SHORT).show()
+          } else {
+            clipboardMgr.copyWithAutoClear(imgUrl)
+            android.widget.Toast.makeText(context, "Image link copied", android.widget.Toast.LENGTH_SHORT).show()
+          }
+        }
       },
       onDownloadLink = { url ->
-        val filename = url.substringAfterLast('/').substringBefore('?').ifEmpty { "download_${System.currentTimeMillis()}" }
+        val lastSegment = url.substringAfterLast('/').substringBefore('?').substringBefore('#')
+        val filename = if (lastSegment.isNotBlank() && lastSegment != "download") {
+          if (lastSegment.contains('.')) lastSegment else "$lastSegment.html"
+        } else {
+          val domain = url.substringAfter("://").substringBefore('/').replace('.', '_')
+          "page_${domain}_${System.currentTimeMillis()}.html"
+        }
         DownloadHandler.getInstance(context).enqueueDownload(
           url = url,
           suggestedFilename = filename,
-          mimeType = "application/octet-stream",
+          mimeType = if (filename.endsWith(".html", true)) "text/html" else "application/octet-stream",
           contentLength = 0L,
           isGhost = activeTab.profile == PrivacyProfile.GHOST
         )
@@ -2088,6 +2178,46 @@ fun BrowserScreen(
       },
       onInspectRedirects = { urlToInspect ->
         inspectingRedirectUrl = urlToInspect
+      }
+    )
+  }
+
+  // 6.2. Tab Group Selection / Creation Sheet for "Open in new tab in group"
+  targetUrlForGroupSelection?.let { groupTargetUrl ->
+    SelectTabGroupSheet(
+      url = groupTargetUrl,
+      tabGroups = tabGroups,
+      tabs = tabs,
+      onDismiss = { targetUrlForGroupSelection = null },
+      onSelectGroup = { selectedGroupId ->
+        val selectedGroup = tabGroups.find { it.id == selectedGroupId }
+        tabManager.openTab(
+          url = groupTargetUrl,
+          profile = activeTab.profile,
+          isDesktop = settings.defaultDesktopMode,
+          groupId = selectedGroupId
+        )
+        targetUrlForGroupSelection = null
+        android.widget.Toast.makeText(
+          context,
+          "Opened in group '${selectedGroup?.title ?: "Group"}'",
+          android.widget.Toast.LENGTH_SHORT
+        ).show()
+      },
+      onCreateGroupAndOpen = { newTitle, colorHex ->
+        val newGroup = tabManager.createGroup(title = newTitle, colorHex = colorHex)
+        tabManager.openTab(
+          url = groupTargetUrl,
+          profile = activeTab.profile,
+          isDesktop = settings.defaultDesktopMode,
+          groupId = newGroup.id
+        )
+        targetUrlForGroupSelection = null
+        android.widget.Toast.makeText(
+          context,
+          "Created space '$newTitle' and opened tab",
+          android.widget.Toast.LENGTH_SHORT
+        ).show()
       }
     )
   }
@@ -2139,7 +2269,7 @@ fun BrowserScreen(
     )
   }
 
-  // 6.6. URL Security Telemetry Sheet
+  // 6.6. URL Security Telemetry Sheet (Brave Shields Style)
   if (showUrlSecuritySheet) {
     UrlSecuritySheet(
       url = activeTab.url,
@@ -2155,6 +2285,18 @@ fun BrowserScreen(
         }
       },
       onDismiss = { showUrlSecuritySheet = false },
+      onStartElementBlocker = {
+        showUrlSecuritySheet = false
+        isElementPickerActive = true
+        geckoEngine.executeScript(activeTab.id, ElementPickerHelper.getPickerInjectionScript())
+      },
+      onOpenGlobalSettings = {
+        showUrlSecuritySheet = false
+        showSecurityCenter = true
+      },
+      onReloadTab = {
+        geckoEngine.reload(activeTab.id)
+      },
       onInspectRedirects = { redirectUrl ->
         showUrlSecuritySheet = false
         inspectingRedirectUrl = redirectUrl
@@ -2179,6 +2321,7 @@ fun BrowserScreen(
     ImagePreviewDialog(
       imageUrl = imgUrl,
       title = title,
+      refererUrl = activeTab.url,
       onDismiss = { imagePreviewData = null },
       onDownload = { url ->
         val ext = url.substringAfterLast('.', "jpg").substringBefore('?')
@@ -2225,19 +2368,8 @@ fun BrowserScreen(
           Button(
             onClick = {
               showDevMenuDialog = false
-              android.widget.Toast.makeText(context, "Opening DOM Inspector...", android.widget.Toast.LENGTH_SHORT).show()
-              val inspectScript = "javascript:(function(){" +
-                "var existing=document.getElementById('__remmi_dom_inspector__');" +
-                "if(existing){existing.remove();return;}" +
-                "var d=document.createElement('div');" +
-                "d.id='__remmi_dom_inspector__';" +
-                "d.style='position:fixed;bottom:0;left:0;right:0;height:50%;background:#0a0e17;color:#00ffcc;font-family:monospace;font-size:12px;z-index:2147483647;border-top:2px solid #00ffcc;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 -4px 20px rgba(0,0,0,0.85);';" +
-                "var header='<div style=\"display:flex;justify-content:space-between;align-items:center;background:#131b26;padding:8px 12px;border-bottom:1px solid #1e293b;\"><b style=\"color:#00ffcc;font-size:12px;\">&lt;/&gt; REMMI DEVELOPER CONSOLE &amp; DOM</b><span onclick=\"document.getElementById(\\'__remmi_dom_inspector__\\').remove()\" style=\"cursor:pointer;color:#ff5555;font-weight:bold;padding:2px 8px;border:1px solid #ff5555;border-radius:4px;\">CLOSE [X]</span></div>';" +
-                "var body='<div style=\"flex:1;overflow:auto;padding:10px;background:#06090e;\"><div style=\"color:#64748b;margin-bottom:6px;\">PAGE: ' + (document.title || 'Untitled') + ' | URL: ' + location.href + '</div><pre style=\"white-space:pre-wrap;color:#38bdf8;margin:0;font-size:11px;user-select:text;\">' + document.documentElement.outerHTML.replace(/[&<>\"]/g,function(t){return {'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[t]||t;}) + '</pre></div>';" +
-                "d.innerHTML=header+body;" +
-                "document.body.appendChild(d);" +
-                "})();"
-              geckoEngine.executeScript(activeTab.id, inspectScript)
+              devToolsInitialTab = com.remmi.browser.ui.components.DevToolsTab.CONSOLE
+              showDevToolsSheet = true
             },
             modifier = Modifier.fillMaxWidth(),
             colors = ButtonDefaults.buttonColors(containerColor = ThemeCyber.colors.secondary),
@@ -2251,7 +2383,8 @@ fun BrowserScreen(
           androidx.compose.material3.OutlinedButton(
             onClick = {
               showDevMenuDialog = false
-              tabManager.openTab("view-source:${activeTab.url}", activeTab.profile, settings.defaultDesktopMode)
+              devToolsInitialTab = com.remmi.browser.ui.components.DevToolsTab.SOURCE
+              showDevToolsSheet = true
             },
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(8.dp),
@@ -2267,6 +2400,29 @@ fun BrowserScreen(
         androidx.compose.material3.TextButton(onClick = { showDevMenuDialog = false }) {
           Text("Cancel", color = ThemeCyber.colors.dangerRed, fontFamily = ThemeCyber.fontFamily)
         }
+      }
+    )
+  }
+
+  // 9.6 Developer Tools Sheet (Console, DOM Tree, Raw Source, Diagnostics)
+  if (showDevToolsSheet) {
+    com.remmi.browser.ui.components.DevToolsSheet(
+      tab = activeTab,
+      initialTab = devToolsInitialTab,
+      onDismiss = { showDevToolsSheet = false },
+      onInjectInPageInspector = {
+        val inspectScript = "(function(){" +
+          "var existing=document.getElementById('__remmi_dom_inspector__');" +
+          "if(existing){existing.remove();return;}" +
+          "var d=document.createElement('div');" +
+          "d.id='__remmi_dom_inspector__';" +
+          "d.style='position:fixed;bottom:0;left:0;right:0;height:45vh;background:#070b11;color:#00ffcc;font-family:monospace;font-size:12px;z-index:2147483647;border-top:2px solid #00ffcc;display:flex;flex-direction:column;box-shadow:0 -4px 20px rgba(0,0,0,0.9);';" +
+          "var header='<div style=\"display:flex;justify-content:space-between;align-items:center;background:#0e1522;padding:6px 12px;border-bottom:1px solid #1e293b;\"><b style=\"color:#00ffcc;\">&lt;/&gt; REMMI DEVTOOLS CONSOLE &amp; DOM</b><span onclick=\"document.getElementById(\\'__remmi_dom_inspector__\\').remove()\" style=\"cursor:pointer;color:#ff5555;font-weight:bold;padding:2px 8px;border:1px solid #ff5555;border-radius:4px;\">✕ CLOSE</span></div>';" +
+          "var body='<div style=\"flex:1;overflow:auto;padding:8px;background:#05070c;\"><div style=\"color:#64748b;font-size:11px;margin-bottom:4px;\">URL: ' + location.href + '</div><pre style=\"white-space:pre-wrap;color:#38bdf8;margin:0;font-size:11px;user-select:text;\">' + (document.documentElement ? document.documentElement.outerHTML.replace(/[&<>\"]/g,function(t){return {'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[t]||t;}) : '') + '</pre></div>';" +
+          "d.innerHTML=header+body;" +
+          "document.body.appendChild(d);" +
+          "})();"
+        geckoEngine.executeScript(activeTab.id, inspectScript)
       }
     )
   }
