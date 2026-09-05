@@ -275,88 +275,30 @@ function connectNative() {
         INFLIGHT_COSMETIC.clear();
         console.log(`[Remmi] Profile changed to ${currentProfile} (gen=${rulesGeneration})`);
       } else if (msg.type === "EXTRACT_HTML") {
-        const requestId = msg.requestId || "";
-        const origTabId = msg.tabId || "";
-        const execExtract = () => {
-          return browser.tabs.executeScript({
-            code: "document.documentElement ? document.documentElement.outerHTML : (document.body ? document.body.outerHTML : '');"
-          });
-        };
-
-        execExtract().then((res) => {
-          let html = (res && res[0]) ? res[0] : "";
-          const MAX_HTML_BYTES = 5 * 1024 * 1024;
-          if (new Blob([html]).size > MAX_HTML_BYTES) {
-            html = html.substring(0, MAX_HTML_BYTES) + "\n<!-- Truncated by Remmi Native Bridge -->";
-          }
-          if (port) port.postMessage({ type: "EXTRACTED_HTML", html: html, url: "", requestId: requestId, tabId: origTabId });
-        }).catch(_e => {
-          browser.tabs.query({ active: true }).then(tabs => {
-            if (tabs && tabs[0] && typeof tabs[0].id === "number") {
-              return browser.tabs.executeScript(tabs[0].id, { code: "document.documentElement ? document.documentElement.outerHTML : (document.body ? document.body.outerHTML : '');" });
-            }
-            throw new Error("No active tab");
-          }).then(res => {
+        const requestId = msg.requestId;
+        const tabId = msg.tabId;
+        if (tabId !== undefined && tabId !== null) {
+          browser.tabs.executeScript(tabId, {
+            code: "document.documentElement.outerHTML;"
+          }).then((res) => {
             let html = (res && res[0]) ? res[0] : "";
-            if (port) port.postMessage({ type: "EXTRACTED_HTML", html: html, url: "", requestId: requestId, tabId: origTabId });
-          }).catch(err => {
-            console.error("[Remmi] EXTRACT_HTML error:", err);
-            if (port) port.postMessage({ type: "EXTRACTED_HTML", html: "", url: "", requestId: requestId, tabId: origTabId });
-          });
-        });
-      } else if (msg.type === "EXECUTE_SCRIPT") {
-        const scriptCode = msg.script;
-        if (scriptCode) {
-          browser.tabs.executeScript({ code: scriptCode }).catch(e => {
-            browser.tabs.query({ active: true }).then(tabs => {
-              if (tabs && tabs[0] && typeof tabs[0].id === "number") {
-                browser.tabs.executeScript(tabs[0].id, { code: scriptCode }).catch(err => {
-                  console.error("[Remmi] EXECUTE_SCRIPT failed:", err);
-                });
-              }
-            }).catch(_ => {});
-          });
-        }
-      } else if (msg.type === "EVAL_SCRIPT") {
-        const scriptCode = msg.script || "";
-        const requestId = msg.requestId || "";
-        if (scriptCode) {
-          const wrapped = "(function(){\n" +
-            "try {\n" +
-            "  var res = (" + scriptCode + ");\n" +
-            "  if (res === undefined) return 'undefined';\n" +
-            "  if (res === null) return 'null';\n" +
-            "  if (typeof res === 'object') {\n" +
-            "    try { return JSON.stringify(res, null, 2); } catch(e) { return String(res); }\n" +
-            "  }\n" +
-            "  return String(res);\n" +
-            "} catch(err) {\n" +
-            "  return 'EXCEPTION: ' + (err.stack || err.message || String(err));\n" +
-            "}\n" +
-            "})();";
-
-          const doEval = () => browser.tabs.executeScript({ code: wrapped });
-
-          doEval().then(res => {
-            const out = (res && res[0] !== undefined) ? String(res[0]) : "undefined";
-            const isError = out.startsWith("EXCEPTION:");
-            if (port) port.postMessage({ type: "EVAL_RESULT", result: out, requestId: requestId, isError: isError });
+            const MAX_HTML_BYTES = 2 * 1024 * 1024;
+            if (new Blob([html]).size > MAX_HTML_BYTES) {
+              html = html.substring(0, MAX_HTML_BYTES) + "<!-- Truncated by Remmi Native Bridge -->";
+            }
+            if (port) port.postMessage({ type: "EXTRACTED_HTML", html: html, url: "", requestId: requestId, tabId: tabId });
           }).catch(_e => {
-            browser.tabs.query({ active: true }).then(tabs => {
-              if (tabs && tabs[0] && typeof tabs[0].id === "number") {
-                return browser.tabs.executeScript(tabs[0].id, { code: wrapped });
-              }
-              throw new Error("No active tab");
-            }).then(res => {
-              const out = (res && res[0] !== undefined) ? String(res[0]) : "undefined";
-              const isError = out.startsWith("EXCEPTION:");
-              if (port) port.postMessage({ type: "EVAL_RESULT", result: out, requestId: requestId, isError: isError });
-            }).catch(err => {
-              if (port) port.postMessage({ type: "EVAL_RESULT", result: "EXCEPTION: " + err.message, requestId: requestId, isError: true });
-            });
+            if (port) port.postMessage({ type: "EXTRACTED_HTML", html: "", url: "", requestId: requestId, tabId: tabId });
           });
         }
-      }
+      } else if (msg.type === "EXECUTE_SCRIPT") {
+        const tabId = msg.tabId;
+        const scriptCode = msg.script;
+        if (tabId !== undefined && tabId !== null && scriptCode) {
+          browser.tabs.executeScript(tabId, { code: scriptCode }).catch(e => {
+            console.error("[Remmi] EXECUTE_SCRIPT failed", e);
+          });
+        }
       } else if (msg.type === "RUN_BENCHMARK") {
         runPingBenchmark(msg.count || 100);
       } else if (msg.type === "GET_DIAGNOSTICS") {
@@ -551,8 +493,7 @@ if (typeof browser !== 'undefined' && browser.tabs) {
 browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message) return;
   
-  const senderUrl = (sender && sender.tab && sender.tab.url) || (sender && sender.url) || message.url || "";
-  if (!senderUrl || (!senderUrl.startsWith("http://") && !senderUrl.startsWith("https://"))) {
+  if (!sender || !sender.tab || !sender.tab.url || !sender.tab.url.startsWith("http")) {
     return;
   }
 
@@ -572,20 +513,6 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
       } catch (_e) {}
     }
     if (sendResponse) sendResponse({ received: true });
-    return true;
-  }
-
-  if (message.type === "BLOCK_ELEMENT") {
-    if (port && portState === "HEALTHY") {
-      try {
-        port.postMessage({
-          type: "BLOCK_ELEMENT",
-          selector: message.selector || "",
-          domain: message.domain || (sender.tab ? (new URL(sender.tab.url)).hostname : "")
-        });
-      } catch (_e) {}
-    }
-    if (sendResponse) sendResponse({ ok: true });
     return true;
   }
 

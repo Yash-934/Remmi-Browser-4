@@ -62,7 +62,7 @@ fun WebContextMenuSheet(
   onDismiss: () -> Unit,
   onOpenInNewTab: (url: String) -> Unit,
   onOpenInNewTabInBackground: (url: String) -> Unit,
-  onOpenInTabGroup: (url: String) -> Unit,
+  onOpenInNewTabInGroup: (url: String) -> Unit,
   onOpenInInPrivateTab: (url: String) -> Unit,
   onOpenInNewWindow: (url: String) -> Unit,
   onPreviewPage: (url: String, title: String) -> Unit,
@@ -111,7 +111,8 @@ fun WebContextMenuSheet(
           .padding(horizontal = 20.dp, vertical = 18.dp),
         verticalAlignment = Alignment.CenterVertically
       ) {
-        if (data.isImage && !data.srcUri.isNullOrBlank()) {
+        if (data.isImage && (!data.resolvedSrcUri.isNullOrBlank() || !data.srcUri.isNullOrBlank())) {
+          val imgUrl = data.resolvedSrcUri ?: data.srcUri!!
           // Image Thumbnail Box with checkered transparency background
           Box(
             modifier = Modifier
@@ -123,7 +124,7 @@ fun WebContextMenuSheet(
           ) {
             AsyncImage(
               model = ImageRequest.Builder(context)
-                .data(data.srcUri)
+                .data(imgUrl)
                 .crossfade(true)
                 .build(),
               contentDescription = data.displayTitle,
@@ -199,9 +200,9 @@ fun WebContextMenuSheet(
       Spacer(modifier = Modifier.height(4.dp))
 
       // 2. Action Menu Items
-      if (data.isImage && !data.srcUri.isNullOrBlank()) {
+      if (data.isImage && (!data.resolvedSrcUri.isNullOrBlank() || !data.srcUri.isNullOrBlank())) {
         // --- IMAGE CONTEXT MENU (Matches Screenshot 2 Exactly) ---
-        val imageUrl = data.srcUri!!
+        val imageUrl = data.resolvedSrcUri ?: data.srcUri!!
 
         // 2. Open image in new tab
         ContextMenuItem(
@@ -335,7 +336,7 @@ fun WebContextMenuSheet(
           textColor = textColor,
           onClick = {
             onDismiss()
-            onOpenInTabGroup(linkUrl)
+            onOpenInNewTabInGroup(linkUrl)
           },
           testTag = "menu_open_new_tab_group"
         )
@@ -403,18 +404,7 @@ fun WebContextMenuSheet(
           textColor = textColor,
           onClick = {
             onDismiss()
-            val textToCopy = if (!data.linkText.isNullOrBlank()) {
-              data.linkText.trim()
-            } else if (!data.linkTitle.isNullOrBlank()) {
-              data.linkTitle.trim()
-            } else if (!data.title.isNullOrBlank()) {
-              data.title.trim()
-            } else if (!data.altText.isNullOrBlank()) {
-              data.altText.trim()
-            } else {
-              data.displayTitle
-            }
-            onCopyLinkText(textToCopy)
+            onCopyLinkText(data.resolvedLinkText)
           },
           testTag = "menu_copy_link_text"
         )

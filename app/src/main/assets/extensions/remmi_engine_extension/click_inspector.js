@@ -34,7 +34,7 @@
       const style = window.getComputedStyle(el);
       const opacity = parseFloat(style.opacity);
       const isLowOpacity = !isNaN(opacity) && opacity < 0.2;
-      const isTransparentBg = (style.backgroundColor && style.backgroundColor.startsWith('rgba') && parseFloat(style.backgroundColor.split(',')[3]) < 0.1);
+      const isTransparentBg = style.backgroundColor === 'transparent' || style.backgroundColor === 'rgba(0, 0, 0, 0)';
       const isFixedOrAbs = style.position === 'fixed' || style.position === 'absolute';
       const zIndex = parseInt(style.zIndex, 10);
       const isHighZ = !isNaN(zIndex) && zIndex >= 100;
@@ -43,10 +43,12 @@
       const isLargeArea = rect.width >= (window.innerWidth * 0.4) && rect.height >= (window.innerHeight * 0.4);
       
       // Combined evidence heuristic:
+      // Do not classify every opacity < 0.2 + fixed/abs as malicious on its own.
       // Flag as SUSPICIOUS_OVERLAY ONLY when transparency/low-opacity combines with covering high z-index,
-      // screen-covering dimensions, or deceptive positioning over interactive coordinates.
+      // screen-covering dimensions, or positioning over interactive coordinates.
       const isSuspiciousOverlay = (isLowOpacity && isFixedOrAbs) ||
-                                  (isTransparentBg && isFixedOrAbs && isHighZ && isLargeArea) ||
+                                  (isTransparentBg && isFixedOrAbs && isHighZ) ||
+                                  (isTransparentBg && isLargeArea && isFixedOrAbs) ||
                                   (isLowOpacity && isLargeArea);
 
       const detailsList = [];
@@ -328,9 +330,9 @@
       // If overlay points to the exact same URL/domain as visible target and no other deception signal exists, do NOT intercept
     }
 
-    // 2. Suspicious popup / window.open attached to overlay
+    // 2. Suspicious popup / window.open attached to overlay or transparent element
     const hasSuspiciousPopup = candidates.some(function(c) {
-      return c.isPopup && (c.type === 'SUSPICIOUS_OVERLAY' || c.isOverlay);
+      return c.isPopup && (c.type === 'SUSPICIOUS_OVERLAY' || c.isTransparent);
     });
     if (hasSuspiciousPopup) return true;
 
@@ -355,10 +357,10 @@
     if (distinctUrls.length > 1) {
       const registrableDomains = new Set(distinctUrls.map(function(u) { return getRegistrableDomain(u); }));
       
-      // If different registrable domains AND conflicting layer types / suspicious overlays
+      // If different registrable domains AND conflicting layer types / transparency
       if (registrableDomains.size > 1) {
         const hasConflictingLayers = candidates.some(function(c) {
-          return c.isOverlay || c.type === 'SUSPICIOUS_OVERLAY';
+          return c.isTransparent || c.type === 'SUSPICIOUS_OVERLAY' || c.tagName !== candidates[0].tagName;
         });
         if (hasConflictingLayers) {
           return true;

@@ -136,8 +136,13 @@ class DownloadHandler(private val context: Context) {
     }
 
     val uriStr = Uri.parse(url)
-    val fileName = sanitizeFileName(suggestedFilename ?: uriStr.lastPathSegment ?: "remmi_download", mimeType)
-    val mime = mimeType ?: guessMimeType(fileName)
+    val rawName = suggestedFilename ?: uriStr.lastPathSegment ?: "remmi_download"
+    val mime = if (!mimeType.isNullOrBlank() && mimeType != "application/octet-stream") {
+      mimeType
+    } else {
+      guessMimeType(rawName, url)
+    }
+    val fileName = sanitizeFileName(rawName, url, mime)
     val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
     val notifId = (downloadId % Int.MAX_VALUE).toInt()
 
@@ -388,29 +393,49 @@ class DownloadHandler(private val context: Context) {
     }
   }
 
-  private fun sanitizeFileName(name: String, mimeType: String? = null): String {
-    val clean = name.substringBefore('?').substringBefore('#').replace(Regex("[^a-zA-Z0-9._-]"), "_")
-    if (clean.contains(".")) {
-      return clean
+  private fun sanitizeFileName(name: String, url: String? = null, mimeType: String? = null): String {
+    var clean = name.replace(Regex("[^a-zA-Z0-9._-]"), "_").trim('_')
+    if (clean.isEmpty()) clean = "download_${System.currentTimeMillis()}"
+
+    val dotIndex = clean.lastIndexOf('.')
+    val hasExtension = dotIndex > 0 && (clean.length - dotIndex - 1) in 1..6
+
+    if (!hasExtension) {
+      val extFromUrl = url?.substringBefore('?')?.substringBefore('#')?.substringAfterLast('.', "")?.lowercase()
+      val validUrlExt = if (!extFromUrl.isNullOrBlank() && extFromUrl.length in 2..5 && extFromUrl.all { it.isLetterOrDigit() } && extFromUrl != "bin") {
+        extFromUrl
+      } else {
+        null
+      }
+
+      val extFromMime = mimeType?.let {
+        when (it.lowercase()) {
+          "text/html" -> "html"
+          "text/plain" -> "txt"
+          "application/pdf" -> "pdf"
+          "image/png" -> "png"
+          "image/jpeg", "image/jpg" -> "jpg"
+          "image/webp" -> "webp"
+          "image/gif" -> "gif"
+          "image/svg+xml" -> "svg"
+          "video/mp4" -> "mp4"
+          "video/webm" -> "webm"
+          "audio/mpeg" -> "mp3"
+          "audio/ogg" -> "ogg"
+          "application/zip" -> "zip"
+          else -> android.webkit.MimeTypeMap.getSingleton().getExtensionFromMimeType(it)
+        }
+      }
+
+      val chosenExt = when {
+        !validUrlExt.isNullOrBlank() -> validUrlExt
+        !extFromMime.isNullOrBlank() && extFromMime != "bin" -> extFromMime
+        url?.startsWith("http", ignoreCase = true) == true -> "html"
+        else -> "html"
+      }
+      clean = "$clean.$chosenExt"
     }
-    val ext = when (mimeType?.lowercase()?.substringBefore(';')) {
-      "text/html" -> "html"
-      "application/pdf" -> "pdf"
-      "application/zip" -> "zip"
-      "application/vnd.android.package-archive" -> "apk"
-      "image/png" -> "png"
-      "image/jpeg", "image/jpg" -> "jpg"
-      "image/webp" -> "webp"
-      "image/gif" -> "gif"
-      "image/svg+xml" -> "svg"
-      "video/mp4" -> "mp4"
-      "video/webm" -> "webm"
-      "audio/mpeg", "audio/mp3" -> "mp3"
-      "text/plain" -> "txt"
-      "application/json" -> "json"
-      else -> "html"
-    }
-    return "$clean.$ext"
+    return clean
   }
 
   private fun formatBytes(bytes: Long): String {
@@ -420,33 +445,45 @@ class DownloadHandler(private val context: Context) {
     return String.format(java.util.Locale.US, "%.1f %s", bytes / Math.pow(1024.0, digitGroups.toDouble()), units[digitGroups])
   }
 
-  private fun guessMimeType(fileName: String): String {
+  private fun guessMimeType(fileName: String, url: String? = null): String {
     val clean = fileName.substringBefore('?').substringBefore('#')
     val ext = clean.substringAfterLast('.', "").lowercase()
-    return when (ext) {
-      "html", "htm" -> "text/html"
-      "css" -> "text/css"
-      "js" -> "application/javascript"
-      "json" -> "application/json"
-      "pdf" -> "application/pdf"
-      "zip" -> "application/zip"
-      "tar", "gz", "tgz" -> "application/gzip"
-      "apk" -> "application/vnd.android.package-archive"
-      "png" -> "image/png"
-      "jpg", "jpeg" -> "image/jpeg"
-      "webp" -> "image/webp"
-      "gif" -> "image/gif"
-      "svg" -> "image/svg+xml"
-      "mp4" -> "video/mp4"
-      "webm" -> "video/webm"
-      "mp3" -> "audio/mpeg"
-      "ogg" -> "audio/ogg"
-      "wav" -> "audio/wav"
-      "txt" -> "text/plain"
-      "md" -> "text/markdown"
-      "doc", "docx" -> "application/msword"
-      else -> "application/octet-stream"
+    if (ext.isNotBlank()) {
+      val mapped = when (ext) {
+        "html", "htm" -> "text/html"
+        "css" -> "text/css"
+        "js" -> "application/javascript"
+        "json" -> "application/json"
+        "pdf" -> "application/pdf"
+        "zip" -> "application/zip"
+        "tar", "gz", "tgz" -> "application/gzip"
+        "apk" -> "application/vnd.android.package-archive"
+        "png" -> "image/png"
+        "jpg", "jpeg" -> "image/jpeg"
+        "webp" -> "image/webp"
+        "gif" -> "image/gif"
+        "svg" -> "image/svg+xml"
+        "mp4" -> "video/mp4"
+        "webm" -> "video/webm"
+        "mp3" -> "audio/mpeg"
+        "ogg" -> "audio/ogg"
+        "wav" -> "audio/wav"
+        "txt" -> "text/plain"
+        "md" -> "text/markdown"
+        "doc", "docx" -> "application/msword"
+        else -> android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext)
+      }
+      if (mapped != null) return mapped
     }
+
+    if (url != null) {
+      val urlClean = url.substringBefore('?').substringBefore('#')
+      val urlExt = urlClean.substringAfterLast('.', "").lowercase()
+      val fromUrl = android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(urlExt)
+      if (fromUrl != null) return fromUrl
+    }
+
+    return "text/html"
   }
 
   suspend fun cancelAllDownloads() {

@@ -42,8 +42,6 @@ class BlockExtension private constructor(private val adblockBridge: AdblockBridg
 
   var siteSecurityProvider: ((String) -> Boolean)? = null
   var cosmeticPolicyProvider: ((String) -> Boolean)? = null
-  var customCosmeticRuleProvider: ((String) -> List<String>)? = null
-  var onCustomBlockElement: ((host: String, selector: String) -> Unit)? = null
   // Global listeners (for passive threat and click interception events)
   private val threatListeners = CopyOnWriteArraySet<(url: String, type: String) -> Unit>()
   private val htmlListeners = CopyOnWriteArraySet<(url: String, html: String) -> Unit>()
@@ -52,7 +50,6 @@ class BlockExtension private constructor(private val adblockBridge: AdblockBridg
   // Per-request / per-tab isolated callback registries
   private val pendingHtmlRequests = ConcurrentHashMap<String, (url: String, html: String) -> Unit>()
   private val pendingClickRequests = ConcurrentHashMap<String, (candidates: List<JSONObject>, hasOverlay: Boolean, intercepted: Boolean, pageUrl: String) -> Unit>()
-  private val pendingEvalRequests = ConcurrentHashMap<String, (result: String, isError: Boolean) -> Unit>()
 
   // Legacy single-property compatibility with thread safety - does NOT wipe multi-listener registry
   @Volatile
@@ -226,7 +223,6 @@ class BlockExtension private constructor(private val adblockBridge: AdblockBridg
       val resp = if (selector.isNotEmpty()) {
         val rule = if (domain.isNotEmpty()) "$domain##$selector" else "##$selector"
         adblockBridge.addCustomRule(rule)
-        onCustomBlockElement?.invoke(domain, selector)
         Log.i(TAG, "[ADBLOCK_CUSTOM_RULE] Added element block rule: $rule")
         JSONObject().apply {
           put("ok", true)
@@ -286,19 +282,17 @@ class BlockExtension private constructor(private val adblockBridge: AdblockBridg
         )
       }
 
-      val customSelectors = customCosmeticRuleProvider?.invoke(host) ?: emptyList()
       val resp = try {
         val cosmetic = adblockBridge.getCosmeticResources(url, classes, ids, exceptions)
-        val combinedForceHide = (cosmetic.forceHideSelectors + customSelectors).distinct()
         Log.d(
           TAG,
-          "[COSMETIC_RESULT] hide=${cosmetic.hideSelectors.size} forceHide=${combinedForceHide.size} procedural=${cosmetic.proceduralCount} generation=${cosmetic.generation}"
+          "[COSMETIC_RESULT] hide=${cosmetic.hideSelectors.size} forceHide=${cosmetic.forceHideSelectors.size} procedural=${cosmetic.proceduralCount} generation=${cosmetic.generation}"
         )
         JSONObject().apply {
           put("ok", cosmetic.ok)
           put("generation", cosmetic.generation)
           put("hideSelectors", org.json.JSONArray(cosmetic.hideSelectors))
-          put("forceHideSelectors", org.json.JSONArray(combinedForceHide))
+          put("forceHideSelectors", org.json.JSONArray(cosmetic.forceHideSelectors))
           put("procedural", org.json.JSONArray(cosmetic.procedural))
           put("proceduralCount", cosmetic.proceduralCount)
           put("generics", cosmetic.generics)
@@ -311,7 +305,7 @@ class BlockExtension private constructor(private val adblockBridge: AdblockBridg
           put("error", t.message ?: "exception")
           put("generation", adblockBridge.getEngineGeneration())
           put("hideSelectors", org.json.JSONArray())
-          put("forceHideSelectors", org.json.JSONArray(customSelectors))
+          put("forceHideSelectors", org.json.JSONArray())
           put("procedural", org.json.JSONArray())
           put("proceduralCount", 0)
           put("generics", false)
@@ -1095,13 +1089,6 @@ class BlockExtension private constructor(private val adblockBridge: AdblockBridg
                 }
               }
             }
-            "EVAL_RESULT", "eval_result" -> {
-              val reqId = message.optString("requestId")
-              val result = message.optString("result", "")
-              val isError = message.optBoolean("isError", false)
-              val cb = if (reqId.isNotEmpty()) pendingEvalRequests.remove(reqId) else null
-              cb?.invoke(result, isError)
-            }
             "LOG", "log" -> {
               if (msgText.isNotEmpty()) {
                 log(msgText)
@@ -1190,31 +1177,6 @@ class BlockExtension private constructor(private val adblockBridge: AdblockBridg
         } catch (e: Exception) {
           log("[WEBEXT] Could not send execute_script: ${e.message}")
         }
-      }
-    }
-  }
-
-  fun evalScript(script: String, callback: (result: String, isError: Boolean) -> Unit) {
-    val cleanScript = if (script.startsWith("javascript:", ignoreCase = true)) script.substring(11) else script
-    val reqId = UUID.randomUUID().toString()
-    pendingEvalRequests[reqId] = callback
-    val msg = JSONObject().apply {
-      put("type", "EVAL_SCRIPT")
-      put("requestId", reqId)
-      put("script", cleanScript)
-    }
-    synchronized(portLock) {
-      val currentPort = activePort
-      if (currentPort != null) {
-        try {
-          currentPort.postMessage(msg)
-        } catch (e: Exception) {
-          pendingEvalRequests.remove(reqId)
-          callback("Error sending eval: ${e.message}", true)
-        }
-      } else {
-        pendingEvalRequests.remove(reqId)
-        callback("Extension bridge not connected yet", true)
       }
     }
   }

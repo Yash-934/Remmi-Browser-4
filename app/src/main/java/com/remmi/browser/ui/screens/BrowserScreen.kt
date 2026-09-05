@@ -134,10 +134,10 @@ import com.remmi.browser.ui.components.PagePreviewSheet
 import com.remmi.browser.ui.components.ReaderView
 import com.remmi.browser.ui.components.SecurityShieldSheet
 import com.remmi.browser.ui.components.TabGridSheet
+import com.remmi.browser.ui.components.TabGroupSelectDialog
+import com.remmi.browser.ui.components.SplitScreenView
 import com.remmi.browser.ui.components.TabStrip
 import com.remmi.browser.ui.components.TerminalUrlBar
-import com.remmi.browser.MainActivity
-import com.remmi.browser.ui.components.SelectTabGroupSheet
 import com.remmi.browser.ui.components.WebContextMenuSheet
 import com.remmi.browser.ui.components.PanicWipeDialog
 import com.remmi.browser.ui.components.RedirectInspectorSheet
@@ -146,7 +146,6 @@ import com.remmi.browser.ui.components.UrlSecuritySheet
 import com.remmi.browser.ui.screens.SecurityCenterScreen
 import com.remmi.browser.security.ClickTargetAnalyzer
 import com.remmi.browser.security.ClickTargetCandidate
-import com.remmi.browser.security.ElementPickerHelper
 import com.remmi.browser.engine.BrowserActions
 import com.remmi.browser.ui.theme.CyberMonoFamily
 import com.remmi.browser.ui.theme.ThemeCyber
@@ -249,8 +248,15 @@ fun BrowserScreen(
   var showTabGridSheet by remember { mutableStateOf(false) }
   var showSecuritySheet by remember { mutableStateOf(false) }
   var showSecurityCenter by remember { mutableStateOf(false) }
+  var showSplitScreen by remember { mutableStateOf(false) }
+  var secondaryTabId by remember { mutableStateOf<String?>(null) }
+  var showTabGroupSelectDialog by remember { mutableStateOf(false) }
+  var pendingTabGroupUrl by remember { mutableStateOf<String?>(null) }
+  
+  // Track secondary tab
+  val secondaryTab = tabs.find { it.id == secondaryTabId }
+
   var showUrlSecuritySheet by remember { mutableStateOf(false) }
-  var isElementPickerActive by remember { mutableStateOf(false) }
   var inspectingRedirectUrl by remember { mutableStateOf<String?>(null) }
   var detectedClickCandidates by remember { mutableStateOf<List<ClickTargetCandidate>>(emptyList()) }
   var showCircuitSheet by remember { mutableStateOf(false) }
@@ -260,8 +266,6 @@ fun BrowserScreen(
   var showReadingListScreen by remember { mutableStateOf(false) }
   var showMenuDropdown by remember { mutableStateOf(false) }
   var showDevMenuDialog by remember { mutableStateOf(false) }
-  var showDevToolsSheet by remember { mutableStateOf(false) }
-  var devToolsInitialTab by remember { mutableStateOf(com.remmi.browser.ui.components.DevToolsTab.CONSOLE) }
   var showPanicWipeDialog by remember { mutableStateOf(false) }
   var showPrintPdfProgress by remember { mutableStateOf(false) }
 
@@ -288,7 +292,6 @@ fun BrowserScreen(
   var activeContextMenuData by remember { mutableStateOf<WebContextMenuData?>(null) }
   var pagePreviewData by remember { mutableStateOf<Pair<String, String>?>(null) }
   var imagePreviewData by remember { mutableStateOf<Pair<String, String>?>(null) }
-  var targetUrlForGroupSelection by remember { mutableStateOf<String?>(null) }
 
   // Find in page state
   var isFindInPageActive by remember { mutableStateOf(false) }
@@ -464,34 +467,13 @@ fun BrowserScreen(
   }
 
   val handleOpenGhostTab: (String?) -> Unit = { url ->
-    scope.launch {
-      isWaitingForTor = true
-      val targetDestination = if (!url.isNullOrBlank() && url != "about:blank") url else "https://check.torproject.org"
-      // Create tab as GHOST with blank url to prevent routing leaks before Tor is ready
-      tabManager.openTab(url = "about:blank", profile = PrivacyProfile.GHOST)
-      val newTabId = tabManager.tabs.value.last().id
-      privacyController.enterGhostMode(newTabId).onSuccess { port ->
-        isWaitingForTor = false
-        withContext(Dispatchers.Main) {
-          android.widget.Toast.makeText(
-            context,
-            "Ghost Mode Active • Encrypted Tor Routing (127.0.0.1:$port)",
-            android.widget.Toast.LENGTH_SHORT
-          ).show()
-        }
-        geckoEngine.loadUrl(newTabId, targetDestination)
-      }.onFailure { err ->
-        isWaitingForTor = false
-        tabManager.closeTab(newTabId)
-        withContext(Dispatchers.Main) {
-          android.widget.Toast.makeText(
-            context,
-            "Ghost Activation Failed: ${err.message}",
-            android.widget.Toast.LENGTH_LONG
-          ).show()
-        }
-      }
-    }
+    val targetDestination = if (!url.isNullOrBlank()) url else "about:blank"
+    tabManager.openTab(url = targetDestination, profile = PrivacyProfile.INCOGNITO)
+    android.widget.Toast.makeText(
+      context,
+      "Opened in Incognito Tab",
+      android.widget.Toast.LENGTH_SHORT
+    ).show()
   }
 
   // Handle system back navigation (including edge swipe gestures)
@@ -630,9 +612,11 @@ fun BrowserScreen(
           .weight(1f)
           .fillMaxWidth()
       ) {
-        val isGhostAndNotReady = activeTab.profile == PrivacyProfile.GHOST && torState !is TorManager.TorState.READY
-
-        if (isWaitingForTor || (activeTab.profile == PrivacyProfile.GHOST && (torState is TorManager.TorState.OFF || torState.isConnecting))) {
+        val primaryContent: @Composable () -> Unit = {
+          Box(modifier = Modifier.fillMaxSize()) {
+            val isGhostAndNotReady = activeTab.profile == PrivacyProfile.GHOST && torState !is TorManager.TorState.READY
+    
+            if (isWaitingForTor || (activeTab.profile == PrivacyProfile.GHOST && (torState is TorManager.TorState.OFF || torState.isConnecting))) {
           val progress = torState.progress
           val statusMsg = torState.statusText
 
@@ -941,62 +925,46 @@ fun BrowserScreen(
             }
           }
         }
-
-        // Floating Banner for Element Picker Mode
-        if (isElementPickerActive) {
-          Surface(
-            modifier = Modifier
-              .align(Alignment.TopCenter)
-              .padding(horizontal = 16.dp, vertical = 10.dp)
-              .fillMaxWidth(),
-            shape = RoundedCornerShape(14.dp),
-            color = ThemeCyber.colors.surface.copy(alpha = 0.95f),
-            border = BorderStroke(1.5.dp, ThemeCyber.colors.primary),
-            shadowElevation = 10.dp,
-          ) {
-            Row(
-              modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-              verticalAlignment = Alignment.CenterVertically
-            ) {
-              Icon(
-                imageVector = Icons.Default.Security,
-                contentDescription = null,
-                tint = ThemeCyber.colors.dangerRed,
-                modifier = Modifier.size(22.dp)
-              )
-              Spacer(modifier = Modifier.width(10.dp))
-              Column(modifier = Modifier.weight(1f)) {
-                Text(
-                  text = "Element Blocker Active",
-                  fontSize = 13.sp,
-                  fontWeight = FontWeight.Bold,
-                  color = ThemeCyber.colors.textPrimary
-                )
-                Text(
-                  text = "Tap any element or ad on the page to block",
-                  fontSize = 11.sp,
-                  color = ThemeCyber.colors.textSecondary
-                )
+        } // Close else
+        } // Close Box(modifier=fillMaxSize())
+        } // Close primaryContent lambda
+        
+        if (showSplitScreen && secondaryTab != null) {
+          SplitScreenView(
+            primaryTab = activeTab,
+            secondaryTab = secondaryTab,
+            primaryContent = primaryContent,
+            onSwapTabs = {
+              val temp = activeTab.id
+              tabManager.switchToTab(secondaryTab.id)
+              secondaryTabId = temp
+            },
+            onCloseSplit = {
+              showSplitScreen = false
+              secondaryTabId = null
+            },
+            onSecondaryUrlChange = { newUrl ->
+              tabManager.updateTab(secondaryTab.id) { 
+                if (it.url != newUrl) it.copy(url = newUrl, isReaderMode = false, readerArticle = null) else it.copy(url = newUrl)
               }
-              Button(
-                onClick = {
-                  isElementPickerActive = false
-                  geckoEngine.executeScript(activeTab.id, ElementPickerHelper.getRemovePickerScript())
-                },
-                colors = ButtonDefaults.buttonColors(containerColor = ThemeCyber.colors.surfaceLight),
-                shape = RoundedCornerShape(8.dp),
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
-              ) {
-                Text("Done", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = ThemeCyber.colors.textPrimary)
-              }
-            }
-          }
+            },
+            onSecondaryTitleChange = { newTitle -> tabManager.updateTab(secondaryTab.id) { it.copy(title = newTitle) } },
+            onSecondaryLoadingChange = { loading -> tabManager.updateTab(secondaryTab.id) { it.copy(isLoading = loading) } },
+            onSecondarySecurityChange = { secure -> tabManager.updateTab(secondaryTab.id) { it.copy(isSecure = secure) } },
+            onSecondaryNavStateChange = { canBack, canForward -> tabManager.updateTab(secondaryTab.id) { it.copy(canGoBack = canBack, canGoForward = canForward) } },
+            onSecondaryTrackerBlocked = { url, _ -> tabManager.incrementTrackerCount(secondaryTab.id, url) },
+            onSecondaryContextMenuRequested = { activeContextMenuData = it },
+            onSecondaryBack = { geckoEngine.goBack(secondaryTab.id) },
+            onSecondaryForward = { geckoEngine.goForward(secondaryTab.id) },
+            onSecondaryReload = { geckoEngine.reload(secondaryTab.id) }
+          )
+        } else {
+          primaryContent()
         }
-        }
-      }
+      } // Close Box(modifier=weight(1f))
 
       // 5. Find in Page Bar (Conditional Overlay)
-      AnimatedVisibility(
+      androidx.compose.animation.AnimatedVisibility(
         visible = isFindInPageActive && !isFullScreenMode,
         enter = slideInVertically { it } + fadeIn(),
         exit = slideOutVertically { it } + fadeOut(),
@@ -2077,29 +2045,18 @@ fun BrowserScreen(
         tabManager.openTabInBackground(url = url, profile = activeTab.profile, isDesktop = settings.defaultDesktopMode)
         android.widget.Toast.makeText(context, "Opened in background tab", android.widget.Toast.LENGTH_SHORT).show()
       },
-      onOpenInTabGroup = { url ->
-        targetUrlForGroupSelection = url
+      onOpenInNewTabInGroup = { url ->
+        pendingTabGroupUrl = url
+        showTabGroupSelectDialog = true
       },
       onOpenInInPrivateTab = { url ->
-        tabManager.openTab(url = url, profile = PrivacyProfile.INCOGNITO, isDesktop = settings.defaultDesktopMode)
-        android.widget.Toast.makeText(context, "Opened in InPrivate tab", android.widget.Toast.LENGTH_SHORT).show()
+        handleOpenGhostTab(url)
       },
       onOpenInNewWindow = { url ->
-        try {
-          val windowIntent = android.content.Intent(context, MainActivity::class.java).apply {
-            action = android.content.Intent.ACTION_VIEW
-            setData(android.net.Uri.parse(url))
-            addFlags(
-              android.content.Intent.FLAG_ACTIVITY_LAUNCH_ADJACENT or
-              android.content.Intent.FLAG_ACTIVITY_NEW_TASK or
-              android.content.Intent.FLAG_ACTIVITY_MULTIPLE_TASK
-            )
-          }
-          context.startActivity(windowIntent)
-          android.widget.Toast.makeText(context, "Opened in split screen window", android.widget.Toast.LENGTH_SHORT).show()
-        } catch (e: Exception) {
-          tabManager.openTab(url = url, profile = activeTab.profile, isDesktop = settings.defaultDesktopMode)
-        }
+        tabManager.openTabInBackground(url = url, profile = activeTab.profile, isDesktop = settings.defaultDesktopMode)
+        secondaryTabId = tabManager.tabs.value.last().id
+        showSplitScreen = true
+        android.widget.Toast.makeText(context, "Opened in Split View", android.widget.Toast.LENGTH_SHORT).show()
       },
       onPreviewPage = { url, title ->
         pagePreviewData = Pair(url, title)
@@ -2119,28 +2076,20 @@ fun BrowserScreen(
       },
       onCopyImage = { imgUrl ->
         scope.launch {
-          android.widget.Toast.makeText(context, "Copying image to clipboard...", android.widget.Toast.LENGTH_SHORT).show()
-          val success = clipboardMgr.copyImage(imgUrl)
+          val success = clipboardMgr.copyImageDirect(imgUrl)
           if (success) {
             android.widget.Toast.makeText(context, "Image copied to clipboard", android.widget.Toast.LENGTH_SHORT).show()
           } else {
-            clipboardMgr.copyWithAutoClear(imgUrl)
-            android.widget.Toast.makeText(context, "Image link copied", android.widget.Toast.LENGTH_SHORT).show()
+            android.widget.Toast.makeText(context, "Failed to copy image", android.widget.Toast.LENGTH_SHORT).show()
           }
         }
       },
       onDownloadLink = { url ->
-        val lastSegment = url.substringAfterLast('/').substringBefore('?').substringBefore('#')
-        val filename = if (lastSegment.isNotBlank() && lastSegment != "download") {
-          if (lastSegment.contains('.')) lastSegment else "$lastSegment.html"
-        } else {
-          val domain = url.substringAfter("://").substringBefore('/').replace('.', '_')
-          "page_${domain}_${System.currentTimeMillis()}.html"
-        }
+        val filename = url.substringAfterLast('/').substringBefore('?').ifEmpty { "download_${System.currentTimeMillis()}" }
         DownloadHandler.getInstance(context).enqueueDownload(
           url = url,
           suggestedFilename = filename,
-          mimeType = if (filename.endsWith(".html", true)) "text/html" else "application/octet-stream",
+          mimeType = "application/octet-stream",
           contentLength = 0L,
           isGhost = activeTab.profile == PrivacyProfile.GHOST
         )
@@ -2182,44 +2131,42 @@ fun BrowserScreen(
     )
   }
 
-  // 6.2. Tab Group Selection / Creation Sheet for "Open in new tab in group"
-  targetUrlForGroupSelection?.let { groupTargetUrl ->
-    SelectTabGroupSheet(
-      url = groupTargetUrl,
-      tabGroups = tabGroups,
-      tabs = tabs,
-      onDismiss = { targetUrlForGroupSelection = null },
-      onSelectGroup = { selectedGroupId ->
-        val selectedGroup = tabGroups.find { it.id == selectedGroupId }
-        tabManager.openTab(
-          url = groupTargetUrl,
-          profile = activeTab.profile,
-          isDesktop = settings.defaultDesktopMode,
-          groupId = selectedGroupId
-        )
-        targetUrlForGroupSelection = null
-        android.widget.Toast.makeText(
-          context,
-          "Opened in group '${selectedGroup?.title ?: "Group"}'",
-          android.widget.Toast.LENGTH_SHORT
-        ).show()
-      },
-      onCreateGroupAndOpen = { newTitle, colorHex ->
-        val newGroup = tabManager.createGroup(title = newTitle, colorHex = colorHex)
-        tabManager.openTab(
-          url = groupTargetUrl,
-          profile = activeTab.profile,
-          isDesktop = settings.defaultDesktopMode,
-          groupId = newGroup.id
-        )
-        targetUrlForGroupSelection = null
-        android.widget.Toast.makeText(
-          context,
-          "Created space '$newTitle' and opened tab",
-          android.widget.Toast.LENGTH_SHORT
-        ).show()
-      }
-    )
+  // 6.2 Tab Group Select Dialog
+  if (showTabGroupSelectDialog) {
+    pendingTabGroupUrl?.let { urlToOpen ->
+      TabGroupSelectDialog(
+        targetUrl = urlToOpen,
+        groups = tabGroups,
+        tabs = tabs,
+        onDismiss = {
+          showTabGroupSelectDialog = false
+          pendingTabGroupUrl = null
+        },
+        onSelectExistingGroup = { groupId ->
+          tabManager.openTabInBackground(
+            url = urlToOpen,
+            profile = activeTab.profile,
+            isDesktop = settings.defaultDesktopMode,
+            groupId = groupId
+          )
+          showTabGroupSelectDialog = false
+          pendingTabGroupUrl = null
+          android.widget.Toast.makeText(context, "Opened in tab group", android.widget.Toast.LENGTH_SHORT).show()
+        },
+        onCreateNewGroup = { title, colorHex ->
+          val newGroup = tabManager.createGroup(title, colorHex)
+          tabManager.openTabInBackground(
+            url = urlToOpen,
+            profile = activeTab.profile,
+            isDesktop = settings.defaultDesktopMode,
+            groupId = newGroup.id
+          )
+          showTabGroupSelectDialog = false
+          pendingTabGroupUrl = null
+          android.widget.Toast.makeText(context, "Group created and tab opened", android.widget.Toast.LENGTH_SHORT).show()
+        }
+      )
+    }
   }
 
   // 6.5. Link Transparency Redirect Inspector Sheet
@@ -2269,7 +2216,7 @@ fun BrowserScreen(
     )
   }
 
-  // 6.6. URL Security Telemetry Sheet (Brave Shields Style)
+  // 6.6. URL Security Telemetry Sheet
   if (showUrlSecuritySheet) {
     UrlSecuritySheet(
       url = activeTab.url,
@@ -2285,18 +2232,6 @@ fun BrowserScreen(
         }
       },
       onDismiss = { showUrlSecuritySheet = false },
-      onStartElementBlocker = {
-        showUrlSecuritySheet = false
-        isElementPickerActive = true
-        geckoEngine.executeScript(activeTab.id, ElementPickerHelper.getPickerInjectionScript())
-      },
-      onOpenGlobalSettings = {
-        showUrlSecuritySheet = false
-        showSecurityCenter = true
-      },
-      onReloadTab = {
-        geckoEngine.reload(activeTab.id)
-      },
       onInspectRedirects = { redirectUrl ->
         showUrlSecuritySheet = false
         inspectingRedirectUrl = redirectUrl
@@ -2321,7 +2256,6 @@ fun BrowserScreen(
     ImagePreviewDialog(
       imageUrl = imgUrl,
       title = title,
-      refererUrl = activeTab.url,
       onDismiss = { imagePreviewData = null },
       onDownload = { url ->
         val ext = url.substringAfterLast('.', "jpg").substringBefore('?')
@@ -2368,8 +2302,19 @@ fun BrowserScreen(
           Button(
             onClick = {
               showDevMenuDialog = false
-              devToolsInitialTab = com.remmi.browser.ui.components.DevToolsTab.CONSOLE
-              showDevToolsSheet = true
+              android.widget.Toast.makeText(context, "Opening DOM Inspector...", android.widget.Toast.LENGTH_SHORT).show()
+              val inspectScript = "javascript:(function(){" +
+                "var existing=document.getElementById('__remmi_dom_inspector__');" +
+                "if(existing){existing.remove();return;}" +
+                "var d=document.createElement('div');" +
+                "d.id='__remmi_dom_inspector__';" +
+                "d.style='position:fixed;bottom:0;left:0;right:0;height:50%;background:#0a0e17;color:#00ffcc;font-family:monospace;font-size:12px;z-index:2147483647;border-top:2px solid #00ffcc;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 -4px 20px rgba(0,0,0,0.85);';" +
+                "var header='<div style=\"display:flex;justify-content:space-between;align-items:center;background:#131b26;padding:8px 12px;border-bottom:1px solid #1e293b;\"><b style=\"color:#00ffcc;font-size:12px;\">&lt;/&gt; REMMI DEVELOPER CONSOLE &amp; DOM</b><span onclick=\"document.getElementById(\\'__remmi_dom_inspector__\\').remove()\" style=\"cursor:pointer;color:#ff5555;font-weight:bold;padding:2px 8px;border:1px solid #ff5555;border-radius:4px;\">CLOSE [X]</span></div>';" +
+                "var body='<div style=\"flex:1;overflow:auto;padding:10px;background:#06090e;\"><div style=\"color:#64748b;margin-bottom:6px;\">PAGE: ' + (document.title || 'Untitled') + ' | URL: ' + location.href + '</div><pre style=\"white-space:pre-wrap;color:#38bdf8;margin:0;font-size:11px;user-select:text;\">' + document.documentElement.outerHTML.replace(/[&<>\"]/g,function(t){return {'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[t]||t;}) + '</pre></div>';" +
+                "d.innerHTML=header+body;" +
+                "document.body.appendChild(d);" +
+                "})();"
+              geckoEngine.executeScript(activeTab.id, inspectScript)
             },
             modifier = Modifier.fillMaxWidth(),
             colors = ButtonDefaults.buttonColors(containerColor = ThemeCyber.colors.secondary),
@@ -2383,8 +2328,7 @@ fun BrowserScreen(
           androidx.compose.material3.OutlinedButton(
             onClick = {
               showDevMenuDialog = false
-              devToolsInitialTab = com.remmi.browser.ui.components.DevToolsTab.SOURCE
-              showDevToolsSheet = true
+              tabManager.openTab("view-source:${activeTab.url}", activeTab.profile, settings.defaultDesktopMode)
             },
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(8.dp),
@@ -2400,29 +2344,6 @@ fun BrowserScreen(
         androidx.compose.material3.TextButton(onClick = { showDevMenuDialog = false }) {
           Text("Cancel", color = ThemeCyber.colors.dangerRed, fontFamily = ThemeCyber.fontFamily)
         }
-      }
-    )
-  }
-
-  // 9.6 Developer Tools Sheet (Console, DOM Tree, Raw Source, Diagnostics)
-  if (showDevToolsSheet) {
-    com.remmi.browser.ui.components.DevToolsSheet(
-      tab = activeTab,
-      initialTab = devToolsInitialTab,
-      onDismiss = { showDevToolsSheet = false },
-      onInjectInPageInspector = {
-        val inspectScript = "(function(){" +
-          "var existing=document.getElementById('__remmi_dom_inspector__');" +
-          "if(existing){existing.remove();return;}" +
-          "var d=document.createElement('div');" +
-          "d.id='__remmi_dom_inspector__';" +
-          "d.style='position:fixed;bottom:0;left:0;right:0;height:45vh;background:#070b11;color:#00ffcc;font-family:monospace;font-size:12px;z-index:2147483647;border-top:2px solid #00ffcc;display:flex;flex-direction:column;box-shadow:0 -4px 20px rgba(0,0,0,0.9);';" +
-          "var header='<div style=\"display:flex;justify-content:space-between;align-items:center;background:#0e1522;padding:6px 12px;border-bottom:1px solid #1e293b;\"><b style=\"color:#00ffcc;\">&lt;/&gt; REMMI DEVTOOLS CONSOLE &amp; DOM</b><span onclick=\"document.getElementById(\\'__remmi_dom_inspector__\\').remove()\" style=\"cursor:pointer;color:#ff5555;font-weight:bold;padding:2px 8px;border:1px solid #ff5555;border-radius:4px;\">✕ CLOSE</span></div>';" +
-          "var body='<div style=\"flex:1;overflow:auto;padding:8px;background:#05070c;\"><div style=\"color:#64748b;font-size:11px;margin-bottom:4px;\">URL: ' + location.href + '</div><pre style=\"white-space:pre-wrap;color:#38bdf8;margin:0;font-size:11px;user-select:text;\">' + (document.documentElement ? document.documentElement.outerHTML.replace(/[&<>\"]/g,function(t){return {'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[t]||t;}) : '') + '</pre></div>';" +
-          "d.innerHTML=header+body;" +
-          "document.body.appendChild(d);" +
-          "})();"
-        geckoEngine.executeScript(activeTab.id, inspectScript)
       }
     )
   }

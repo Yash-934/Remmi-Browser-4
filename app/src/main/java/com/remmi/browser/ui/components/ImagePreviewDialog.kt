@@ -15,14 +15,12 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.BrokenImage
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Share
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -30,7 +28,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -40,14 +38,14 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import coil3.compose.AsyncImage
+import coil3.compose.AsyncImagePainter
 import coil3.compose.SubcomposeAsyncImage
-import coil3.compose.SubcomposeAsyncImageContent
 import coil3.request.ImageRequest
 import coil3.request.crossfade
 import com.remmi.browser.ui.theme.ThemeCyber
@@ -56,14 +54,21 @@ import com.remmi.browser.ui.theme.ThemeCyber
 fun ImagePreviewDialog(
   imageUrl: String,
   title: String,
-  refererUrl: String? = null,
   onDismiss: () -> Unit,
   onDownload: (String) -> Unit,
   onShare: (String, String) -> Unit,
   onOpenInTab: (String) -> Unit,
 ) {
   val context = LocalContext.current
-  var retryKey by remember { mutableIntStateOf(0) }
+
+  val resolvedUrl = remember(imageUrl) {
+    val src = imageUrl.trim()
+    when {
+      src.startsWith("//") -> "https:$src"
+      src.startsWith("http://") || src.startsWith("https://") || src.startsWith("data:") -> src
+      else -> "https://$src"
+    }
+  }
 
   Dialog(
     onDismissRequest = onDismiss,
@@ -92,7 +97,7 @@ fun ImagePreviewDialog(
             color = ThemeCyber.colors.primary
           )
           Text(
-            text = title.ifEmpty { imageUrl.substringAfterLast('/') },
+            text = title.ifEmpty { resolvedUrl.substringAfterLast('/') },
             fontSize = 13.sp,
             color = Color.White,
             maxLines = 1,
@@ -102,7 +107,7 @@ fun ImagePreviewDialog(
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
           IconButton(
-            onClick = { onOpenInTab(imageUrl) },
+            onClick = { onOpenInTab(resolvedUrl) },
             modifier = Modifier
               .size(36.dp)
               .clip(CircleShape)
@@ -112,7 +117,7 @@ fun ImagePreviewDialog(
           }
 
           IconButton(
-            onClick = { onDownload(imageUrl) },
+            onClick = { onDownload(resolvedUrl) },
             modifier = Modifier
               .size(36.dp)
               .clip(CircleShape)
@@ -122,7 +127,7 @@ fun ImagePreviewDialog(
           }
 
           IconButton(
-            onClick = { onShare(imageUrl, title) },
+            onClick = { onShare(resolvedUrl, title) },
             modifier = Modifier
               .size(36.dp)
               .clip(CircleShape)
@@ -150,89 +155,73 @@ fun ImagePreviewDialog(
           .padding(top = 70.dp, bottom = 40.dp, start = 16.dp, end = 16.dp),
         contentAlignment = Alignment.Center
       ) {
-        val imageRequest = remember(imageUrl, retryKey) {
-          ImageRequest.Builder(context)
-            .data(imageUrl)
-            .crossfade(true)
-            .build()
-        }
+        var isLoading by remember { mutableStateOf(true) }
+        var isError by remember { mutableStateOf(false) }
 
-        SubcomposeAsyncImage(
-          model = imageRequest,
+        AsyncImage(
+          model = ImageRequest.Builder(context)
+            .data(resolvedUrl)
+            .crossfade(true)
+            .build(),
           contentDescription = title,
           contentScale = ContentScale.Fit,
+          onState = { state ->
+            when (state) {
+              is AsyncImagePainter.State.Loading -> {
+                isLoading = true
+                isError = false
+              }
+              is AsyncImagePainter.State.Success -> {
+                isLoading = false
+                isError = false
+              }
+              is AsyncImagePainter.State.Error -> {
+                isLoading = false
+                isError = true
+              }
+              else -> Unit
+            }
+          },
           modifier = Modifier
             .fillMaxSize()
-            .clip(RoundedCornerShape(8.dp)),
-          loading = {
-            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-              Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                CircularProgressIndicator(
-                  color = ThemeCyber.colors.primary,
-                  modifier = Modifier.size(36.dp),
-                  strokeWidth = 3.dp
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-                Text(
-                  text = "Loading image...",
-                  color = Color.White.copy(alpha = 0.7f),
-                  fontSize = 12.sp,
-                  fontFamily = ThemeCyber.fontFamily
-                )
-              }
-            }
-          },
-          error = {
-            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-              Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                modifier = Modifier.padding(24.dp)
-              ) {
-                Icon(
-                  Icons.Default.BrokenImage,
-                  contentDescription = null,
-                  tint = Color(0xFFFF5252),
-                  modifier = Modifier.size(48.dp)
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-                Text(
-                  text = "Could not load image preview",
-                  color = Color.White,
-                  fontSize = 14.sp,
-                  fontWeight = FontWeight.SemiBold
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                  text = "The host may restrict hotlinking or require page credentials.",
-                  color = Color.White.copy(alpha = 0.6f),
-                  fontSize = 12.sp,
-                  textAlign = TextAlign.Center
-                )
-                Spacer(modifier = Modifier.height(16.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                  Button(
-                    onClick = { retryKey++ },
-                    colors = ButtonDefaults.buttonColors(containerColor = ThemeCyber.colors.primary, contentColor = Color.Black)
-                  ) {
-                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("Retry")
-                  }
-
-                  Button(
-                    onClick = { onOpenInTab(imageUrl) },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.2f), contentColor = Color.White)
-                  ) {
-                    Text("Open Direct")
-                  }
-                }
-              }
-            }
-          },
-          success = {
-            SubcomposeAsyncImageContent()
-          }
+            .clip(RoundedCornerShape(8.dp))
         )
+
+        if (isLoading) {
+          CircularProgressIndicator(
+            color = ThemeCyber.colors.primary,
+            modifier = Modifier.size(40.dp)
+          )
+        }
+
+        if (isError) {
+          Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+            modifier = Modifier.padding(24.dp)
+          ) {
+            Icon(
+              imageVector = Icons.Default.Image,
+              contentDescription = "Image load error",
+              tint = Color.White.copy(alpha = 0.5f),
+              modifier = Modifier.size(48.dp)
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(
+              text = "Unable to preview image directly",
+              color = Color.White.copy(alpha = 0.8f),
+              fontSize = 14.sp
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+              text = resolvedUrl,
+              color = Color.White.copy(alpha = 0.4f),
+              fontSize = 11.sp,
+              maxLines = 2,
+              overflow = TextOverflow.Ellipsis
+            )
+          }
+        }
       }
     }
   }
