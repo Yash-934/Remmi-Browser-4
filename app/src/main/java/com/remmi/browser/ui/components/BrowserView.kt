@@ -75,7 +75,7 @@ fun BrowserView(
     label = "cyber_progress",
   )
 
-  var lastNavigatedUrl by remember(tab.id) { mutableStateOf("") }
+  var lastNavigatedUrl by remember(tab.id) { mutableStateOf(geckoEngine.getLastDispatchedUrl(tab.id) ?: "") }
   val isViewAttached by geckoEngine.getViewAttachmentState(tab.id).collectAsState()
 
   // Callbacks bundle decoupled from GeckoSession
