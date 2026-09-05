@@ -1316,7 +1316,9 @@ class GeckoEngineManager private constructor(private val context: Context) {
                 }
               } catch (_: Exception) {}
             }
-            sessionCallbacks[tabId]?.onUrlChange(it)
+            if (!isInternalOrIgnoredUrl(it)) {
+              sessionCallbacks[tabId]?.onUrlChange(it)
+            }
           }
         }
       }
