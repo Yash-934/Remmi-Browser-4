@@ -42,8 +42,28 @@ class RemmiApp : Application(), SingletonImageLoader.Factory {
       .build()
   }
 
+  private fun isMainProcess(): Boolean {
+    val processName = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+      getProcessName()
+    } else {
+      try {
+        File("/proc/self/cmdline").readText().trim().trim(0.toChar())
+      } catch (_: Exception) {
+        val pid = android.os.Process.myPid()
+        val am = getSystemService(android.content.Context.ACTIVITY_SERVICE) as? android.app.ActivityManager
+        am?.runningAppProcesses?.firstOrNull { it.pid == pid }?.processName
+      }
+    }
+    return processName == null || processName == packageName
+  }
+
   override fun onCreate() {
     super.onCreate()
+
+    if (!isMainProcess()) {
+      Log.i("RemmiApp", "Skipping application onCreate for child/isolated process: ${if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) getProcessName() else "child"}")
+      return
+    }
 
     // 1. Earliest process start & abnormal termination journal check
     com.remmi.browser.util.DebugLogManager.init(this)
