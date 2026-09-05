@@ -106,6 +106,14 @@ class GeckoEngineManager private constructor(private val context: Context) {
         }
       }
     }
+
+    blockExtension.addThreatListener { threatUrl, threatType ->
+      mainHandler.post {
+        sessionCallbacks.values.forEach { cb ->
+          cb.onTrackerBlocked(threatUrl, threatType)
+        }
+      }
+    }
   }
   enum class GeckoInitState {
     NOT_STARTED,
@@ -1674,11 +1682,6 @@ class GeckoEngineManager private constructor(private val context: Context) {
         lastScrollY = scrollY
         sessionCallbacks[tabId]?.onScrollChanged(scrollX, scrollY, isScrollingDown)
       }
-    }
-
-    // Set WebExtension threat tracker callback
-    blockExtension.onThreatNeutralized = { threatUrl, threatType ->
-      sessionCallbacks[tabId]?.onTrackerBlocked(threatUrl, threatType)
     }
   }
 

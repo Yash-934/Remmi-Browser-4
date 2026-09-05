@@ -874,8 +874,8 @@ fun BrowserScreen(
                   }
                 }
               },
-              onTrackerBlocked = { url, domain ->
-                tabManager.incrementTrackerCount(activeTab.id, domain)
+              onTrackerBlocked = { url, _ ->
+                tabManager.incrementTrackerCount(activeTab.id, url)
               },
               onReaderArticleExtracted = { article ->
                 tabManager.setReaderArticle(activeTab.id, article)

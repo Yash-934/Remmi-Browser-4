@@ -415,8 +415,14 @@ class TabManager {
   fun incrementTrackerCount(tabId: String, blockedDomain: String) {
     trackerEventCounter.incrementAndGet()
     val category = com.remmi.browser.security.TrackerClassifier.classify(blockedDomain)
+    val displayHost = try {
+      val uri = java.net.URI(if (blockedDomain.contains("://")) blockedDomain else "https://$blockedDomain")
+      uri.host?.ifEmpty { blockedDomain } ?: blockedDomain
+    } catch (_: Exception) {
+      blockedDomain
+    }
     updateTab(tabId) { tab ->
-      val newLog = if (tab.blockedLog.size >= 100) tab.blockedLog.drop(1) + blockedDomain else tab.blockedLog + blockedDomain
+      val newLog = if (tab.blockedLog.size >= 100) tab.blockedLog.drop(1) + displayHost else tab.blockedLog + displayHost
       when (category) {
         com.remmi.browser.security.TrackerCategory.ADVERTISING -> tab.copy(
           blockedTrackersCount = tab.blockedTrackersCount + 1,

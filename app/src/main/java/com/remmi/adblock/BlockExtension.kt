@@ -424,6 +424,25 @@ class BlockExtension private constructor(private val adblockBridge: AdblockBridg
       }
       val handlerElapsedNs = System.nanoTime() - handlerStartNs
 
+      if (decision.blocked) {
+        adblockBridge.totalBlockedCount.incrementAndGet()
+        val category = com.remmi.browser.security.TrackerClassifier.classify(url).name
+        legacyThreatListener?.let { listener ->
+          try {
+            listener(url, category)
+          } catch (e: Exception) {
+            log("[WEBEXT] Legacy threat listener error: ${e.message}")
+          }
+        }
+        threatListeners.forEach { listener ->
+          try {
+            listener(url, category)
+          } catch (e: Exception) {
+            log("[WEBEXT] Threat listener error: ${e.message}")
+          }
+        }
+      }
+
       Log.d(
         TAG,
         "[WEBEXT_NATIVE_DECISION_END] type=$resourceType blocked=${decision.blocked} bypass=$bypass rule=${decision.ruleId} src=${decision.ruleSource}"
@@ -578,6 +597,25 @@ class BlockExtension private constructor(private val adblockBridge: AdblockBridg
                   val wElapsed = wDoneRealtime - wStartRealtime
                   val wDoneMsg = "[FORENSIC][WEBEXT_WORKER_DONE] requestId=$requestId thread=$workerThread elapsed=$wElapsed ms blocked=${decision.blocked} rule=${decision.ruleId} elapsedRealtime=$wDoneRealtime"
                   Log.d(TAG, wDoneMsg)
+
+                  if (decision.blocked) {
+                    adblockBridge.totalBlockedCount.incrementAndGet()
+                    val category = com.remmi.browser.security.TrackerClassifier.classify(url).name
+                    legacyThreatListener?.let { listener ->
+                      try {
+                        listener(url, category)
+                      } catch (e: Exception) {
+                        log("[WEBEXT] Legacy threat listener error: ${e.message}")
+                      }
+                    }
+                    threatListeners.forEach { listener ->
+                      try {
+                        listener(url, category)
+                      } catch (e: Exception) {
+                        log("[WEBEXT] Threat listener error: ${e.message}")
+                      }
+                    }
+                  }
 
                   val listResponsible = when {
                     decision.defaultMatched -> "default"
